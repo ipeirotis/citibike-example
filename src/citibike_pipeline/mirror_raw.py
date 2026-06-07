@@ -79,13 +79,17 @@ def mirror_one(key: str, size: int, *, overwrite: bool, dry_run: bool) -> str:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Mirror Citibike raw ZIP archives into GCS.")
     ap.add_argument("--region", choices=["nyc", "jc", "all"], default="all")
+    ap.add_argument("--files", nargs="*", help="specific archive filenames (overrides --region/--limit)")
     ap.add_argument("--limit", type=int, default=0, help="cap number of archives (0 = no cap)")
     ap.add_argument("--overwrite", action="store_true", help="re-upload even if size matches")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    archives = list_archives(args.region)
-    if args.limit:
+    archives = list_archives("all" if args.files else args.region)
+    if args.files:
+        want = set(args.files)
+        archives = [(k, s) for k, s in archives if k in want or k.rsplit("/", 1)[-1] in want]
+    elif args.limit:
         archives = archives[: args.limit]
 
     total = len(archives)
