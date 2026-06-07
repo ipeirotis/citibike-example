@@ -93,15 +93,20 @@ def main(argv: list[str] | None = None) -> int:
         archives = archives[: args.limit]
 
     total = len(archives)
-    counts = {"skip": 0, "mirror": 0, "plan": 0}
+    counts = {"skip": 0, "mirror": 0, "plan": 0, "error": 0}
     for i, (key, size) in enumerate(archives, 1):
-        status = mirror_one(key, size, overwrite=args.overwrite, dry_run=args.dry_run)
+        try:
+            status = mirror_one(key, size, overwrite=args.overwrite, dry_run=args.dry_run)
+        except Exception as e:  # don't let one bad archive abort a long backfill
+            counts["error"] += 1
+            print(f"[{i:>3}/{total}] ERROR  {key}: {e}", flush=True)
+            continue
         counts[status] += 1
         print(f"[{i:>3}/{total}] {status:6} {key} ({size/1e6:.1f} MB)", flush=True)
 
     print(f"\nDone. mirrored={counts['mirror']} skipped={counts['skip']} "
-          f"planned={counts['plan']} -> {config.gcs_uri(config.RAW_PREFIX)}")
-    return 0
+          f"errors={counts['error']} -> {config.gcs_uri(config.RAW_PREFIX)}")
+    return 1 if counts["error"] else 0
 
 
 if __name__ == "__main__":

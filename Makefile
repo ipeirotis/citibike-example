@@ -6,7 +6,7 @@ PY   := .venv/bin/python
 WITH := bash scripts/with-credentials.sh
 export PYTHONPATH := src
 
-.PHONY: help install selftest mirror mirror-jc extract extract-jc external view materialize unify
+.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -31,6 +31,9 @@ extract:       ## Stage 2: raw ZIPs in GCS -> typed Parquet in GCS (all regions)
 
 extract-jc:    ## Stage 2: extract only Jersey City
 	$(WITH) $(PY) -m citibike_pipeline.extract --region jc
+
+extract-nyc-new: ## Stage 2: extract NYC monthly archives newer than what's loaded
+	$(WITH) $(PY) -m citibike_pipeline.extract --nyc-new
 
 external:      ## Stage 3: (re)create BigQuery external tables over the Parquet
 	$(WITH) $(PY) -m citibike_pipeline.load_bigquery external

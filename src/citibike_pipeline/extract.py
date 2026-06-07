@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import sys
 import tempfile
 import zipfile
@@ -123,26 +124,60 @@ def _raw_keys(region: str) -> list[str]:
     return sorted(keys)
 
 
+def _nyc_new_keys() -> list[str]:
+    """NYC *monthly* archives published but not yet represented in rides/parquet.
+
+    Lets a re-run pick up everything 'up to today' without re-extracting (and
+    risking the double-count of) the older annual archives already loaded. Only
+    months strictly newer than the latest one already present are returned, so
+    there is no overlap with existing Parquet.
+    """
+    from .mirror_raw import list_archives
+    have = set()
+    for name in gcsio.list_names(config.PARQUET_PREFIXES[("NYC", "current")]):
+        m = re.search(r"(\d{6})", os.path.basename(name))
+        if m:
+            have.add(m.group(1))
+    latest = max(have) if have else "000000"
+    return sorted(
+        key for key, _ in list_archives("nyc")
+        if re.match(r"\d{6}-citibike-tripdata", os.path.basename(key))
+        and os.path.basename(key)[:6] > latest
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Extract raw Citibike ZIPs (in GCS) to typed Parquet.")
     ap.add_argument("--region", choices=["nyc", "jc", "all"], default="all")
     ap.add_argument("--files", nargs="*", help="specific raw ZIP names (under raw/zip/)")
+    ap.add_argument("--nyc-new", action="store_true",
+                    help="extract only NYC monthly archives newer than what's already in rides/parquet")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    keys = args.files if args.files else _raw_keys(args.region)
+    if args.nyc_new:
+        keys = _nyc_new_keys()
+    elif args.files:
+        keys = args.files
+    else:
+        keys = _raw_keys(args.region)
     if args.limit:
         keys = keys[: args.limit]
     if not keys:
         print("No raw archives found. Run the mirror stage first.")
         return 1
 
+    errors = 0
     for key in keys:
-        process_archive(key, overwrite=args.overwrite, dry_run=args.dry_run)
-    print(f"\nDone. {len(keys)} archive(s) processed.")
-    return 0
+        try:
+            process_archive(key, overwrite=args.overwrite, dry_run=args.dry_run)
+        except Exception as e:  # keep going; report the count at the end
+            errors += 1
+            print(f"[ERROR] {key}: {e}", flush=True)
+    print(f"\nDone. {len(keys)} archive(s) processed, {errors} error(s).")
+    return 1 if errors else 0
 
 
 if __name__ == "__main__":

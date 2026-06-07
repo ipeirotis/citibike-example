@@ -42,4 +42,8 @@ def download_file(src_path: str, local_path: str) -> None:
 
 
 def upload_stream(fileobj, dest_path: str, content_type: str | None = None) -> None:
-    _bucket().blob(dest_path).upload_from_file(fileobj, content_type=content_type)
+    # chunk_size makes large, non-seekable streams (e.g. a 1.6 GB ZIP piped
+    # straight from S3) upload as a resumable chunked PUT rather than being
+    # buffered whole in memory.
+    blob = _bucket().blob(dest_path, chunk_size=40 * 1024 * 1024)
+    blob.upload_from_file(fileobj, content_type=content_type)
