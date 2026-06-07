@@ -1,0 +1,28 @@
+{
+  "name": "trips_unified",
+  "object": "nyu-datasets.citibike.trips_unified",
+  "description": "Canonical, lossless union of every Citibike trip era. Superset of the legacy (<=2021) and current (>=2021) CSV layouts; era-specific fields are NULL where the source did not provide them. Produced by src/citibike_pipeline/load_bigquery.py and mirrored in sql/trips_unified.sql.",
+  "columns": [
+    {"name": "ride_id", "type": "STRING", "eras": ["current"], "note": "current-era hash id; NULL for legacy (do not synthesize)"},
+    {"name": "rideable_type", "type": "STRING", "eras": ["current"], "note": "classic_bike|electric_bike|docked_bike; NULL for legacy (inferable from bike_id via BikeTypes.md)"},
+    {"name": "start_time", "type": "TIMESTAMP", "eras": ["legacy", "current"], "source": {"legacy": "starttime/start_time", "current": "started_at"}},
+    {"name": "stop_time", "type": "TIMESTAMP", "eras": ["legacy", "current"], "source": {"legacy": "stoptime/stop_time", "current": "ended_at"}},
+    {"name": "trip_duration_seconds", "type": "INT64", "eras": ["legacy", "current"], "note": "legacy: explicit trip_duration (seconds); current: TIMESTAMP_DIFF(stop_time, start_time, SECOND)"},
+    {"name": "start_station_id", "type": "STRING", "eras": ["legacy", "current"], "note": "STRING covers both eras (legacy integer ids and current alphanumeric like HB102)"},
+    {"name": "start_station_name", "type": "STRING", "eras": ["legacy", "current"]},
+    {"name": "start_station_latitude", "type": "FLOAT64", "eras": ["legacy", "current"], "source": {"current": "start_lat"}},
+    {"name": "start_station_longitude", "type": "FLOAT64", "eras": ["legacy", "current"], "source": {"current": "start_lng"}},
+    {"name": "end_station_id", "type": "STRING", "eras": ["legacy", "current"]},
+    {"name": "end_station_name", "type": "STRING", "eras": ["legacy", "current"]},
+    {"name": "end_station_latitude", "type": "FLOAT64", "eras": ["legacy", "current"], "source": {"current": "end_lat"}},
+    {"name": "end_station_longitude", "type": "FLOAT64", "eras": ["legacy", "current"], "source": {"current": "end_lng"}},
+    {"name": "member_casual", "type": "STRING", "eras": ["legacy", "current"], "note": "'member'|'casual'; legacy user_type mapped Subscriber->member, Customer->casual"},
+    {"name": "bike_id", "type": "STRING", "eras": ["legacy"], "note": "NULL for current era"},
+    {"name": "birth_year", "type": "INT64", "eras": ["legacy"], "note": "NULL for current era (removed for privacy)"},
+    {"name": "gender", "type": "INT64", "eras": ["legacy"], "note": "0=unknown, 1=male, 2=female; NULL for current era"},
+    {"name": "distance_meters", "type": "FLOAT64", "eras": ["legacy", "current"], "note": "ST_DISTANCE between start and end station geopoints"},
+    {"name": "region", "type": "STRING", "eras": ["legacy", "current"], "note": "'NYC' | 'JC' (Jersey City)"},
+    {"name": "source_era", "type": "STRING", "eras": ["legacy", "current"], "note": "'legacy' | 'current'"},
+    {"name": "source_file", "type": "STRING", "eras": ["legacy", "current"], "note": "GCS Parquet object the row was read from (_FILE_NAME pseudo-column)"}
+  ]
+}

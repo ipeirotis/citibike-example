@@ -28,23 +28,24 @@ goal of this repo is a clean, well-documented reconciliation of those eras.
 ## Architecture / data flow
 
 ```
-Citibike S3 archives (ZIP of CSVs)
-        │  download + unzip
+Citibike S3 archives (ZIP of CSVs)  —  s3.amazonaws.com/tripdata/
+        │  Stage 1: mirror byte-for-byte (idempotent)
         ▼
-   per-period CSVs  ──normalize columns──►  typed Parquet
-        │
-        │  upload
+GCS  gs://citibike-archive/raw/zip/         ← immutable, write-once landing zone
+        │  Stage 2: extract — detect layout per CSV (header), normalize, type
         ▼
-GCS bucket: gs://citibike-archive/  (csv/ and parquet/ subfolders)
-        │
-        │  BigQuery external table over Parquet, then load to native
+GCS  .../tripdata/parquet/  .../rides/parquet/  (+ jc/…)    typed Parquet
+        │  Stage 3: external tables, then the unifying UNION
         ▼
-BigQuery: nyu-datasets.citibike
-        │
-        │  UNION + column reconciliation across eras
+BigQuery  nyu-datasets.citibike
+        │  trips_2013_2021 + trips_2021_now (+ JC)  ──reconcile eras──►
         ▼
-   ONE unified trips table/view  (canonical schema below)
+   trips_unified  (canonical superset view; materializable as `trips`)
 ```
+
+Stage 1 (mirror raw ZIPs into GCS before any parsing) makes the pipeline
+reproducible: Citibike re-publishes/renames archives, so the extract reads the
+frozen copy in `raw/zip/`, never live S3.
 
 ## Cloud resources
 
@@ -64,16 +65,19 @@ access** below) — do not widen roles without asking.
 
 ## Source data
 
-Citibike publishes historical trip data as ZIP files under
-**`https://s3.amazonaws.com/tripdata/`** (index: `.../tripdata/index.html`):
+Citibike publishes trip data as ZIP files under
+**`https://s3.amazonaws.com/tripdata/`** (167 archives as of mid-2026):
 
-- **2013 – early 2021 (annual):** `YYYY-citibike-tripdata.zip` — the *legacy* layout.
-- **2021 – present (monthly):** `YYYYMM-citibike-tripdata.csv.zip` — the *current*
-  layout. Jersey City rides are published separately as
-  `JC-YYYYMM-citibike-tripdata.csv.zip`.
+- **Annual `YYYY-citibike-tripdata.zip`** for 2013–2023.
+- **Monthly `YYYYMM-citibike-tripdata.zip`** (occasionally `.csv.zip`) from 2024-01.
+- **Jersey City `JC-YYYYMM-citibike-tripdata.csv.zip`** (2015 → present), published
+  separately and detected by the `JC-` prefix.
 
-The cutover happened in **2021**; some 2021 files exist in both layouts, so detect the
-layout from the CSV header rather than from the year alone.
+Two changes are independent: the **packaging** went annual → monthly in 2024, but the
+**CSV layout** changed in early **2021** — the 2021 annual archive contains *both*
+(Jan = legacy, Feb+ = current). So always detect the layout from the CSV header, never
+the year. Annual archives also sometimes ship the same month twice (root + nested
+folder), which the extractor de-duplicates.
 
 ## The two source schemas (the thing we are unifying)
 
@@ -111,15 +115,16 @@ member_casual
 
 ## Canonical unified schema
 
-Target a single table/view that is the **superset** of both eras. Era-specific fields
-are `NULL` where the source did not provide them. Suggested columns and types:
+Implemented as the view **`nyu-datasets.citibike.trips_unified`** (the original
+`all_trips` is left intact). It is the **superset** of both eras — era-specific fields
+are `NULL` where the source did not provide them:
 
 ```
 ride_id                  STRING     -- current era only
-rideable_type            STRING     -- current era; inferable for legacy via bike_id
+rideable_type            STRING     -- current era; NULL legacy (inferable via bike_id)
 start_time               TIMESTAMP
 stop_time                TIMESTAMP
-trip_duration            INT64      -- seconds; explicit legacy, computed current
+trip_duration_seconds    INT64      -- legacy: explicit seconds; current: computed
 start_station_id         STRING     -- STRING to cover both eras
 start_station_name       STRING
 start_station_latitude   FLOAT64
@@ -128,36 +133,65 @@ end_station_id           STRING
 end_station_name         STRING
 end_station_latitude     FLOAT64
 end_station_longitude    FLOAT64
-member_casual            STRING     -- 'member' | 'casual' (mapped for legacy)
+member_casual            STRING     -- 'member' | 'casual' (legacy mapped from user_type)
 bike_id                  STRING     -- legacy only
 birth_year               INT64      -- legacy only
 gender                   INT64      -- legacy only (0=unknown,1=male,2=female)
+distance_meters          FLOAT64    -- ST_DISTANCE(start, end) station points
+region                   STRING     -- 'NYC' | 'JC'
+source_era               STRING     -- 'legacy' | 'current'
+source_file              STRING     -- GCS Parquet object the row came from (_FILE_NAME)
 ```
 
-Consider adding provenance columns (e.g. `source_file`, `source_era`) so unified rows
-remain traceable to the archive they came from.
+This improves on `all_trips`, which recomputes duration in *minutes*, drops
+`ride_id`/`bike_id`/`birth_year`/`gender`, and carries no provenance. The
+machine-readable spec lives in `schemas/canonical.json`.
 
 ## Repository structure
 
-This repo is **new** — currently only this file, a README, and the
-`cloud-bootstrap` skill. There is no pipeline code yet. When building it, keep things
-discoverable; a reasonable layout:
-
 ```
 .
-├── CLAUDE.md                       # this file
-├── README.md
-├── .claude/
-│   └── skills/
-│       └── cloud-bootstrap/        # vendored credential-management skill (see below)
-├── src/ or pipeline/               # extraction, normalization, Parquet conversion, load
-├── schemas/                        # canonical schema + per-era mappings (JSON/SQL)
-└── sql/                            # BigQuery DDL + the unifying UNION view/query
+├── CLAUDE.md  README.md  requirements.txt  Makefile
+├── .claude/skills/cloud-bootstrap/     # vendored credential-management skill
+├── src/citibike_pipeline/
+│   ├── config.py          # all resource names (project, bucket, prefixes, tables)
+│   ├── schemas.py         # column normalization, era detection, typed Parquet schemas
+│   ├── transform.py       # raw CSV (strings) -> typed Arrow table (pure, unit-tested)
+│   ├── mirror_raw.py      # Stage 1: Citibike S3 -> gs://…/raw/zip/ (idempotent)
+│   ├── extract.py         # Stage 2: raw ZIPs in GCS -> typed Parquet in GCS
+│   ├── load_bigquery.py   # Stage 3: external tables + the unified view/table
+│   ├── gcsio.py           # thin GCS helpers
+│   └── selftest.py        # `make selftest` — transform core, no cloud
+├── sql/trips_unified.sql  # the unifying UNION (human-readable; generated by load_bigquery)
+└── schemas/canonical.json # machine-readable canonical schema
 ```
 
-Prefer **Python 3** (pandas/pyarrow + `google-cloud-storage` and
-`google-cloud-bigquery`) for the pipeline, matching the reference notebooks. Add a
-`requirements.txt` when the first code lands.
+Python 3.11 (pandas/pyarrow + `google-cloud-storage`/`google-cloud-bigquery`), matching
+the reference notebooks. Run `make install` then `make selftest`. The package runs from
+`src/` via `PYTHONPATH=src` (set by the `Makefile`).
+
+## Pipeline
+
+Three stages, each a CLI module run via the `Makefile`. Cloud auth is automatic
+(cloud-bootstrap SessionStart hook), so the modules just use the default clients.
+
+| Stage | Command | What it does |
+|---|---|---|
+| 1 — mirror | `make mirror` / `mirror-jc` | Byte-for-byte copy of every Citibike `*.zip` into `gs://citibike-archive/raw/zip/`. Idempotent (skips files already present with matching size). **Downstream reads raw from here, never S3.** |
+| 2 — extract | `make extract` / `extract-jc` | For each raw ZIP, detect each CSV's layout from its header, normalize + type, write Parquet to the region/era prefix. Chunked, so multi-GB annual CSVs stay in memory budget. |
+| 3 — load | `make unify` (`external` + `view`) | (Re)create external tables over the Parquet and deploy `trips_unified`. `make materialize` snapshots it into native `trips`. |
+
+**Fidelity to the reference notebooks.** Stage 2 follows `Copy_Citibike_Trips*.ipynb`
+where it matters — the column-rename map, the `NULL`/`\N`→null and trailing-`.0`
+cleaning, and the per-era PyArrow schemas — so its Parquet is a drop-in for the existing
+`trips_2013_2021` / `trips_2021_now` tables. It *improves* on them with the raw-mirror
+step, header-based era detection (vs. moving files by hand), de-duplication of doubled
+files inside annual archives, chunked streaming, and Jersey City coverage. `make
+selftest` pins these rules.
+
+**NYC Parquet already exists** (produced by those notebooks); the default flow reuses it
+and only extracts JC. Full NYC re-extraction from raw works too — just verify row counts
+against the annual archives' per-year de-dup (see `extract._csv_members`).
 
 ## Cloud access (credentials)
 
