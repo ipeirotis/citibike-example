@@ -168,11 +168,9 @@ the repo so every Claude Code session can re-authenticate without manual steps.
 - The encryption passphrase is provided via the **`GCP_CREDENTIALS_KEY`** environment
   variable (already set in this environment). It is the *passphrase*, **not** the key
   itself — never print it or commit it.
-- **First-time setup has not run yet** (`.cloud-config.json` does not exist). To enable
-  cloud access, ask: *"Set up GCP credentials for project `nyu-datasets`."* The skill
-  will create/confirm the service account, encrypt the key to
-  `.cloud-credentials.<git-email>.enc`, install a SessionStart auth hook, and append a
-  `## Cloud Credentials` section to this file.
+- **Setup is complete** (`.cloud-config.json` is committed). Sessions authenticate
+  automatically via the SessionStart hook — see the **Cloud Credentials** section below
+  for the service account, granted roles, and how to add teammates or escalate access.
 - Once set up, future sessions authenticate automatically; `gcloud`/`bq` are installed
   by the skill's SessionStart hook.
 - **Never** commit a plaintext key (`credentials.json`); never widen IAM roles without
@@ -204,3 +202,43 @@ the repo so every Claude Code session can re-authenticate without manual steps.
   = current loader, `BikeTypes.md` = bike-id → bike-type heuristics).
 - Existing loaded data: BigQuery `nyu-datasets.citibike`.
 - cloud-bootstrap skill: <https://github.com/ipeirotis/cloud-bootstrap>.
+
+## Cloud Credentials
+
+> Provisioned by the **cloud-bootstrap** skill (first-time setup). Sessions authenticate
+> automatically — no manual steps.
+
+- **Provider / project:** GCP, `nyu-datasets`.
+- **Service account:** `claude-agent@nyu-datasets.iam.gserviceaccount.com` — a dedicated
+  agent identity, kept separate from the pipeline's `citibike-sa`.
+- **Granted roles** (least privilege for this pipeline):
+
+  | Role | Why |
+  |---|---|
+  | `roles/storage.objectAdmin` | Read/write raw CSV + Parquet in `gs://citibike-archive` |
+  | `roles/bigquery.dataEditor` | Create/replace and load tables in `nyu-datasets.citibike` |
+  | `roles/bigquery.jobUser` | Run BigQuery load/query jobs |
+
+- **Per-user encrypted keys:** multi-user setup — each member has their own
+  `.cloud-credentials.<git-email>.enc`. In Claude Code on the Web this workspace's git
+  identity is `noreply@anthropic.com`, so the committed key is
+  `.cloud-credentials.noreply@anthropic.com.enc`. Keys are AES-256-CBC (`openssl`); the
+  passphrase lives only in the `GCP_CREDENTIALS_KEY` env var, never in the repo.
+- **How auth happens:** the SessionStart hook `.claude/hooks/cloud-auth.sh` (wired in
+  `.claude/settings.json`) installs `gcloud`, decrypts the key with `GCP_CREDENTIALS_KEY`,
+  runs `gcloud auth activate-service-account`, and sets the project. The plaintext key is
+  written to `/tmp` and deleted immediately.
+- **TLS note:** this sandbox runs a TLS-inspecting egress proxy, so the hook points
+  `gcloud`/`bq` at the system CA bundle (`core/custom_ca_certs_file` →
+  `/etc/ssl/certs/ca-certificates.crt`). Python clients honor the pre-set
+  `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE`.
+- **Add a teammate:** they open the repo in Claude Code, set their own
+  `GCP_CREDENTIALS_KEY`, and ask to "set up cloud credentials"; the skill runs its
+  *add-team-member* flow (a new key on the same SA, encrypted with their passphrase).
+  Their GCP account needs `roles/iam.serviceAccountKeyAdmin` on the project.
+- **Escalate permissions:** if a command returns 403, ask the user to grant the specific
+  role (the skill's *permission-escalation* flow names it). Do **not** widen roles unasked.
+- **Verified at setup:** GCS bucket listing, BigQuery table listing, and a trivial query
+  all succeeded. `nyu-datasets.citibike` already contains `trips_2013_2021` and
+  `trips_2021_now` (external) plus a unified **`all_trips`** view — the prior art this
+  pipeline reproduces.
