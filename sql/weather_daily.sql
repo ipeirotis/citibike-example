@@ -30,7 +30,62 @@
 -- the view already reads the id/element/date/value/qflag columns across every
 -- ghcnd_* yearly table; the IN clause only changes which rows survive the scan.
 
-CREATE OR REPLACE VIEW `nyu-datasets.weather.weather_daily` AS
+CREATE OR REPLACE VIEW `nyu-datasets.weather.weather_daily`
+(
+  date OPTIONS(description="Calendar date of the daily summary; one row per station per day."),
+  year OPTIONS(description="Year component of date."),
+  month OPTIONS(description="Month component of date (1-12)."),
+  day OPTIONS(description="Day-of-month component of date (1-31)."),
+  day_of_week OPTIONS(description="Day of week, BigQuery convention: 1=Sunday ... 7=Saturday."),
+  is_weekend OPTIONS(description="1 if date is Saturday or Sunday, else 0."),
+  season OPTIONS(description="Northern-Hemisphere meteorological season: Winter (Dec-Feb), Spring (Mar-May), Summer (Jun-Aug), Fall (Sep-Nov)."),
+  station_name OPTIONS(description="GHCN-Daily station name (e.g. 'NY CITY CNTRL PARK')."),
+  city OPTIONS(description="City of the ZIP code containing the station (from geo_us_boundaries.zip_codes)."),
+  state OPTIONS(description="Two-letter US state code of the station."),
+  zip_code OPTIONS(description="ZIP code whose polygon contains the station coordinates."),
+  county_name OPTIONS(description="County whose polygon contains the station coordinates (from geo_us_boundaries.counties)."),
+  longitude OPTIONS(description="Station longitude in decimal degrees (WGS84)."),
+  latitude OPTIONS(description="Station latitude in decimal degrees (WGS84)."),
+  geo_coord OPTIONS(description="Station location as a GEOGRAPHY point built from (longitude, latitude)."),
+  tmin_c OPTIONS(description="Daily minimum air temperature in degrees Celsius (GHCN-D element TMIN)."),
+  tmax_c OPTIONS(description="Daily maximum air temperature in degrees Celsius (GHCN-D element TMAX)."),
+  tavg_c OPTIONS(description="Daily mean air temperature in degrees Celsius: GHCN-D TAVG when reported, otherwise the average of TMIN and TMAX."),
+  tmin_f OPTIONS(description="Daily minimum air temperature in degrees Fahrenheit (converted from tmin_c)."),
+  tmax_f OPTIONS(description="Daily maximum air temperature in degrees Fahrenheit (converted from tmax_c)."),
+  tavg_f OPTIONS(description="Daily mean air temperature in degrees Fahrenheit (converted from tavg_c)."),
+  prcp_mm OPTIONS(description="Total daily precipitation (rain plus melted snow) in millimeters (GHCN-D PRCP); 0 when none reported."),
+  prcp_inches OPTIONS(description="Total daily precipitation in inches (converted from prcp_mm)."),
+  snow_mm OPTIONS(description="Daily new snowfall in millimeters (GHCN-D SNOW); 0 when none reported. New snowfall, not depth on the ground."),
+  snow_inches OPTIONS(description="Daily new snowfall in inches (converted from snow_mm)."),
+  is_rainy OPTIONS(description="1 if any measurable precipitation fell (prcp_mm > 0), else 0."),
+  is_snowy OPTIONS(description="1 if any measurable snow fell (snow_mm > 0), else 0."),
+  is_hot_day OPTIONS(description="1 if the daily high exceeded 90 degrees F (tmax_f > 90), else 0."),
+  is_freezing OPTIONS(description="1 if the daily low was below freezing, 32 degrees F (tmin_f < 32), else 0."),
+  heating_degree_days OPTIONS(description="Heating degree days = max(0, 65 - tavg_f). Larger values mean colder days with more heating demand."),
+  cooling_degree_days OPTIONS(description="Cooling degree days = max(0, tavg_f - 65). Larger values mean hotter days with more cooling demand."),
+  snow_depth_mm OPTIONS(description="Depth of snow lying on the ground in millimeters (GHCN-D SNWD); NULL when not reported. Distinct from snow_mm (new snowfall)."),
+  snow_depth_inches OPTIONS(description="Depth of snow on the ground in inches (converted from snow_depth_mm)."),
+  rh_avg OPTIONS(description="Daily mean relative humidity, percent (GHCN-D RHAV). Reported only by automated (ASOS) stations in recent years; NULL otherwise."),
+  rh_min OPTIONS(description="Daily minimum relative humidity, percent (GHCN-D RHMN). ASOS stations in recent years only; NULL otherwise."),
+  rh_max OPTIONS(description="Daily maximum relative humidity, percent (GHCN-D RHMX). ASOS stations in recent years only; NULL otherwise."),
+  is_humid OPTIONS(description="1 if mean relative humidity was 70 percent or higher (rh_avg >= 70), 0 if lower, NULL when humidity is unavailable."),
+  dewpoint_c OPTIONS(description="Daily mean dew-point temperature in degrees Celsius (GHCN-D ADPT). ASOS stations in recent years only; NULL otherwise."),
+  dewpoint_f OPTIONS(description="Daily mean dew-point temperature in degrees Fahrenheit (converted from dewpoint_c)."),
+  wetbulb_c OPTIONS(description="Daily mean wet-bulb temperature in degrees Celsius (GHCN-D AWBT). ASOS stations in recent years only; NULL otherwise."),
+  wetbulb_f OPTIONS(description="Daily mean wet-bulb temperature in degrees Fahrenheit (converted from wetbulb_c)."),
+  sea_level_pressure_hpa OPTIONS(description="Daily mean sea-level air pressure in hectopascals (millibars) (GHCN-D ASLP). ASOS stations in recent years only; NULL otherwise."),
+  station_pressure_hpa OPTIONS(description="Daily mean station-level air pressure in hectopascals (millibars) (GHCN-D ASTP). ASOS stations in recent years only; NULL otherwise."),
+  wind_avg_ms OPTIONS(description="Daily average wind speed in meters per second (GHCN-D AWND); NULL when not reported. Sheltered stations (e.g. Central Park) read low; best used as a relative signal."),
+  wind_avg_mph OPTIONS(description="Daily average wind speed in miles per hour (converted from wind_avg_ms)."),
+  wind_gust_ms OPTIONS(description="Fastest 2-minute wind speed of the day in meters per second (GHCN-D WSF2); NULL when not reported."),
+  wind_gust_mph OPTIONS(description="Fastest 2-minute wind speed of the day in miles per hour (converted from wind_gust_ms)."),
+  wind_dir_deg OPTIONS(description="Direction of the fastest 2-minute wind, degrees clockwise from true north 0-360 (GHCN-D WDF2); NULL when not reported."),
+  is_foggy OPTIONS(description="1 if fog, ice fog, or freezing fog was observed (GHCN-D WT01), else 0."),
+  is_thunder OPTIONS(description="1 if thunder was observed (GHCN-D WT03), else 0."),
+  is_hazy OPTIONS(description="1 if smoke or haze was observed (GHCN-D WT08), else 0.")
+)
+OPTIONS(description="Daily weather summaries for all US GHCN-Daily stations, one row per station per day. Superset of useful elements (temperature, precipitation, snow, snow depth, humidity, dew point, wet-bulb, pressure, wind, weather-type flags) in metric and imperial units, joined to ZIP/city/county. Source: bigquery-public-data.ghcn_d. Humidity/dew-point/wet-bulb/pressure come from ASOS stations in recent years only and are NULL elsewhere.")
+AS
 
 WITH
 Station_Map AS (
