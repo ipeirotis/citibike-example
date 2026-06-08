@@ -32,18 +32,19 @@ CHUNK_ROWS = 500_000
 
 
 def _csv_members(zf: zipfile.ZipFile) -> list[str]:
-    """CSV members of a ZIP, de-duplicated by basename.
+    """CSV members of a ZIP, de-duplicated so each month is counted once.
 
-    Annual archives frequently contain the same monthly CSV twice — once at the
-    root and once inside a nested subfolder. We keep a single member per
-    basename (the shallowest path), mirroring the manual `mv */* .` + de-dup the
-    reference notebooks do, so a month is never counted twice.
+    Citibike's annual archives duplicate months in two ways:
 
-    Caveat: a few annual archives also ship a month as BOTH a combined CSV and
-    `_1/_2/...` shards (different basenames). Those are handled per-year in the
-    original notebooks; for full NYC re-extraction verify counts. The default
-    pipeline reuses the existing NYC Parquet and only extracts Jersey City, whose
-    archives are a single flat CSV, so this case does not arise there.
+    1. *Nested copies* — the same monthly CSV at the root and inside a nested
+       subfolder (same basename). We keep the shallowest path, mirroring the
+       manual `mv */* .` + de-dup the reference notebooks do.
+    2. *Combined + shards* — some years ship a month as BOTH a combined
+       `<base>.csv` and `<base>_1/_2/...csv` shards (all of 2013 and 2018 do).
+       They are alternate exports of the same month, so when the combined file
+       is present we keep it and drop the shards — matching the representation
+       the existing `trips_2013_2021` Parquet was built from. (Shard-only months
+       and monthly `-partN` files have no combined twin and are kept as-is.)
     """
     candidates = [
         n for n in zf.namelist()
@@ -56,7 +57,18 @@ def _csv_members(zf: zipfile.ZipFile) -> list[str]:
         base = os.path.basename(n)
         if base not in best or n.count("/") < best[base].count("/"):
             best[base] = n
-    return sorted(best.values())
+    members = sorted(best.values())
+
+    # Drop `<base>_N` shards whenever the combined `<base>` is also present.
+    stems = {os.path.basename(n)[: -len(".csv")] for n in members}
+    kept = []
+    for n in members:
+        stem = os.path.basename(n)[: -len(".csv")]
+        shard = re.match(r"(.+)_\d+$", stem)
+        if shard and shard.group(1) in stems:
+            continue
+        kept.append(n)
+    return sorted(kept)
 
 
 def _read_header(zf: zipfile.ZipFile, member: str) -> list[str]:

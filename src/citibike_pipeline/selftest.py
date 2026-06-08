@@ -10,6 +10,7 @@ Parquet schema.
 from __future__ import annotations
 
 import io
+import zipfile
 
 import pandas as pd
 
@@ -69,6 +70,34 @@ def main() -> int:
     assert cd["ride_id"] == ["CDAD1D727D887388"]
     assert cd["rideable_type"] == ["classic_bike"]
     assert cd["member_casual"] == ["member"]
+
+    # --- extract de-dup (combined+shard / nested copies) ----------------------
+    try:
+        from .extract import _csv_members
+    except Exception as e:  # cloud libs unavailable in a truly minimal env
+        print(f"  (skipped _csv_members check: {e})")
+    else:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for n in ("201309-citibike-tripdata.csv",         # combined ...
+                      "201309-citibike-tripdata_1.csv",       # ... + shards -> drop shards
+                      "201309-citibike-tripdata_2.csv",
+                      "201405-citibike-tripdata_1.csv",       # shard-only -> keep
+                      "201406-citibike-tripdata.csv",         # combined ...
+                      "nested/201406-citibike-tripdata.csv",  # ... nested dup -> keep shallow
+                      "202604-citibike-tripdata-part1.csv",   # monthly parts -> keep all
+                      "202604-citibike-tripdata-part2.csv"):
+                z.writestr(n, "h\n1\n")
+        with zipfile.ZipFile(buf) as z:
+            got = _csv_members(z)
+        assert got == sorted([
+            "201309-citibike-tripdata.csv",
+            "201405-citibike-tripdata_1.csv",
+            "201406-citibike-tripdata.csv",
+            "202604-citibike-tripdata-part1.csv",
+            "202604-citibike-tripdata-part2.csv",
+        ]), got
+        print("  _csv_members keeps combined over shards and de-dups nested copies")
 
     print("selftest OK — both layouts normalize to the expected typed schema")
     return 0

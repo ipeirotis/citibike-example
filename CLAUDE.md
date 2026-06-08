@@ -190,8 +190,9 @@ files inside annual archives, chunked streaming, and Jersey City coverage. `make
 selftest` pins these rules.
 
 **NYC Parquet already exists** (produced by those notebooks); the default flow reuses it
-and only extracts JC. Full NYC re-extraction from raw works too — just verify row counts
-against the annual archives' per-year de-dup (see `extract._csv_members`).
+and only extracts JC. Full NYC re-extraction from raw works too — `extract._csv_members`
+de-duplicates the doubled files in annual archives (nested copies, and the combined-vs-shard
+duplication that all of 2013 and 2018 ship) so no month is double-counted.
 
 ## Cloud access (credentials)
 
