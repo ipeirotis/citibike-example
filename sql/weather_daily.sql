@@ -53,14 +53,14 @@ CREATE OR REPLACE VIEW `nyu-datasets.weather.weather_daily`
   tmin_f OPTIONS(description="Daily minimum air temperature in degrees Fahrenheit (converted from tmin_c)."),
   tmax_f OPTIONS(description="Daily maximum air temperature in degrees Fahrenheit (converted from tmax_c)."),
   tavg_f OPTIONS(description="Daily mean air temperature in degrees Fahrenheit (converted from tavg_c)."),
-  prcp_mm OPTIONS(description="Total daily precipitation (rain plus melted snow) in millimeters (GHCN-D PRCP); 0 when none reported."),
-  prcp_inches OPTIONS(description="Total daily precipitation in inches (converted from prcp_mm)."),
-  snow_mm OPTIONS(description="Daily new snowfall in millimeters (GHCN-D SNOW); 0 when none reported. New snowfall, not depth on the ground."),
-  snow_inches OPTIONS(description="Daily new snowfall in inches (converted from snow_mm)."),
-  is_rainy OPTIONS(description="1 if any measurable precipitation fell (prcp_mm > 0), else 0."),
-  is_snowy OPTIONS(description="1 if any measurable snow fell (snow_mm > 0), else 0."),
-  is_hot_day OPTIONS(description="1 if the daily high exceeded 90 degrees F (tmax_f > 90), else 0."),
-  is_freezing OPTIONS(description="1 if the daily low was below freezing, 32 degrees F (tmin_f < 32), else 0."),
+  prcp_mm OPTIONS(description="Total daily precipitation (rain plus melted snow) in millimeters (GHCN-D PRCP); NULL when not reported (a measured dry day is 0)."),
+  prcp_inches OPTIONS(description="Total daily precipitation in inches (converted from prcp_mm); NULL when not reported."),
+  snow_mm OPTIONS(description="Daily new snowfall in millimeters (GHCN-D SNOW); NULL when not reported. New snowfall, not depth on the ground."),
+  snow_inches OPTIONS(description="Daily new snowfall in inches (converted from snow_mm); NULL when not reported."),
+  is_rainy OPTIONS(description="1 if measurable precipitation fell (prcp_mm > 0), 0 if dry, NULL when precipitation was not reported."),
+  is_snowy OPTIONS(description="1 if measurable snow fell (snow_mm > 0), 0 if none, NULL when snowfall was not reported."),
+  is_hot_day OPTIONS(description="1 if the daily high exceeded 90 degrees F (tmax_f > 90), 0 if not, NULL when no maximum temperature was reported."),
+  is_freezing OPTIONS(description="1 if the daily low was below freezing, 32 degrees F (tmin_f < 32), 0 if not, NULL when no minimum temperature was reported."),
   heating_degree_days OPTIONS(description="Heating degree days = max(0, 65 - tavg_f). Larger values mean colder days with more heating demand."),
   cooling_degree_days OPTIONS(description="Cooling degree days = max(0, tavg_f - 65). Larger values mean hotter days with more cooling demand."),
   snow_depth_mm OPTIONS(description="Depth of snow lying on the ground in millimeters (GHCN-D SNWD); NULL when not reported. Distinct from snow_mm (new snowfall)."),
@@ -107,7 +107,10 @@ Station_Map AS (
     S.id LIKE 'US%'
     AND S.latitude IS NOT NULL
     AND S.longitude IS NOT NULL
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY Z.zip_code ORDER BY S.name) = 1
+  -- One row per station (keep every station, not just one per ZIP). Where a
+  -- station's point falls in more than one ZIP/county polygon, pick a
+  -- deterministic representative.
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY S.id ORDER BY Z.zip_code, C.county_name) = 1
 ),
 
 Daily_Weather AS (
@@ -121,8 +124,10 @@ Daily_Weather AS (
     ) AS tavg_c,
     MAX(IF(element = 'TMIN' AND qflag IS NULL, value/10.0, NULL)) AS tmin_c,
     MAX(IF(element = 'TMAX' AND qflag IS NULL, value/10.0, NULL)) AS tmax_c,
-    COALESCE(MAX(IF(element = 'PRCP' AND qflag IS NULL, value/10.0, NULL)), 0) AS prcp_mm,
-    COALESCE(MAX(IF(element = 'SNOW' AND qflag IS NULL, value, NULL)), 0) AS snow_mm,
+    -- NULL (not 0) where unreported, so a non-reporting station/day is not
+    -- mistaken for a measured dry day.
+    MAX(IF(element = 'PRCP' AND qflag IS NULL, value/10.0, NULL)) AS prcp_mm,
+    MAX(IF(element = 'SNOW' AND qflag IS NULL, value, NULL)) AS snow_mm,
     -- Snow depth on the ground (mm) -- distinct from SNOW (fresh snowfall).
     -- Left NULL (not 0) where unreported, so it is not confused with a measured 0.
     MAX(IF(element = 'SNWD' AND qflag IS NULL, value, NULL)) AS snow_depth_mm,
@@ -140,13 +145,16 @@ Daily_Weather AS (
     MAX(IF(element = 'AWND' AND qflag IS NULL, value/10.0, NULL)) AS wind_avg_ms,
     MAX(IF(element = 'WSF2' AND qflag IS NULL, value/10.0, NULL)) AS wind_gust_ms,
     MAX(IF(element = 'WDF2' AND qflag IS NULL, value,      NULL)) AS wind_dir_deg,
-    -- Weather-type flags: present (1) only on days the phenomenon was observed.
-    MAX(IF(element = 'WT01', 1, 0)) AS is_foggy,
-    MAX(IF(element = 'WT03', 1, 0)) AS is_thunder,
-    MAX(IF(element = 'WT08', 1, 0)) AS is_hazy
+    -- Weather-type flags: 1 on days the phenomenon was observed (good-quality
+    -- rows only, matching the qflag IS NULL filter used for every other element).
+    MAX(IF(element = 'WT01' AND qflag IS NULL, 1, 0)) AS is_foggy,
+    MAX(IF(element = 'WT03' AND qflag IS NULL, 1, 0)) AS is_thunder,
+    MAX(IF(element = 'WT08' AND qflag IS NULL, 1, 0)) AS is_hazy
   FROM `bigquery-public-data.ghcn_d.ghcnd_*`
   WHERE
-    _TABLE_SUFFIX BETWEEN '1900' AND '2030'
+    -- Cover the full GHCN-D record, including 19th-century stations (e.g. Central
+    -- Park's history back to 1869).
+    _TABLE_SUFFIX BETWEEN '1750' AND '2030'
     AND element IN ('TMIN', 'TMAX', 'TAVG', 'PRCP', 'SNOW',
                     'SNWD', 'RHAV', 'RHMN', 'RHMX', 'ADPT', 'AWBT',
                     'ASLP', 'ASTP', 'AWND', 'WSF2', 'WDF2',
@@ -185,10 +193,10 @@ SELECT
   ROUND(W.prcp_mm / 25.4, 2) AS prcp_inches,
   W.snow_mm,
   ROUND(W.snow_mm / 25.4, 1) AS snow_inches,
-  IF(W.prcp_mm > 0, 1, 0) AS is_rainy,
-  IF(W.snow_mm > 0, 1, 0) AS is_snowy,
-  IF((W.tmax_c * 9/5) + 32 > 90, 1, 0) AS is_hot_day,
-  IF((W.tmin_c * 9/5) + 32 < 32, 1, 0) AS is_freezing,
+  CASE WHEN W.prcp_mm IS NULL THEN NULL WHEN W.prcp_mm > 0 THEN 1 ELSE 0 END AS is_rainy,
+  CASE WHEN W.snow_mm IS NULL THEN NULL WHEN W.snow_mm > 0 THEN 1 ELSE 0 END AS is_snowy,
+  CASE WHEN W.tmax_c IS NULL THEN NULL WHEN (W.tmax_c * 9/5) + 32 > 90 THEN 1 ELSE 0 END AS is_hot_day,
+  CASE WHEN W.tmin_c IS NULL THEN NULL WHEN (W.tmin_c * 9/5) + 32 < 32 THEN 1 ELSE 0 END AS is_freezing,
   ROUND(GREATEST(0, 65 - (W.tavg_c * 9/5 + 32)), 1) AS heating_degree_days,
   ROUND(GREATEST(0, (W.tavg_c * 9/5 + 32) - 65), 1) AS cooling_degree_days,
   -- ── Extended attributes (NULL where the station did not report them) ──────────
