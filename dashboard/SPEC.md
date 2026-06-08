@@ -26,12 +26,19 @@ be able to dig into the details themselves.
 - Pair each view with a short, plain-language **takeaway**, so the *insight* lands —
   not just the chart.
 
-## The data (provided)
-A prepared daily table — `nyu-datasets.citibike.daily_trips_weather` — with one row
-per day: trip counts (split by rider type, region, and bike type), durations and
-distances, and that day's NYC weather (temperature, rain, snow). The dashboard reads
-this prepared, day-level data rather than the hundreds of millions of raw trips. (A
-coding agent can inspect the table to learn its exact columns.)
+## The data
+Your **trip data is your own** — daily ridership comes from the BigQuery warehouse you
+built in Part 1 (the raw Citibike import); roll it up to one row per day (counts by
+rider type, region, and bike type, plus durations and distances).
+
+The **weather is provided**: `nyu-datasets.weather.m_weather_daily_nyc` holds daily NYC
+temperature, rain, and snow. **Join your daily trips to it on the calendar date** —
+assembling that combined daily table is part of the work. The dashboard then reads the
+day-level result, not the hundreds of millions of raw trips.
+
+*Fallback:* if your warehouse isn't ready, the instructor provides daily trip
+aggregates at `nyu-datasets.citibike.m_daily_trips` (and a `daily_trips` view) that you
+can join against the weather table instead.
 
 ## What "great" looks like
 - **Clear at a glance, deep on demand.**
@@ -42,5 +49,6 @@ coding agent can inspect the table to learn its exact columns.)
 - **Actually deployed** — live at a public URL, not just running on a laptop.
 
 ## Out of scope
-Building the daily dataset itself (it's provided) and other heavy data engineering.
-The focus is the dashboard.
+The raw Citibike ingestion — that was Part 1; here you build on its output (or the
+fallback). The focus is joining trips to weather and turning the result into the
+dashboard.
