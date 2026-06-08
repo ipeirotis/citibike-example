@@ -99,6 +99,16 @@ def main() -> int:
         ]), got
         print("  _csv_members keeps combined over shards and de-dups nested copies")
 
+    # A short header on a non-zero-index chunk (a later read_csv chunk) must fill the
+    # absent column without union-misaligning indexes and inflating the row count.
+    sf = _frame(CURRENT_CSV)
+    sf.columns = normalize_columns(sf.columns)
+    sf = sf.drop(columns=["rideable_type"])
+    sf.index = pd.RangeIndex(500_000, 500_000 + len(sf))
+    st = frame_to_table(sf, "current")
+    assert st.num_rows == len(sf), (st.num_rows, len(sf))
+    print("  short header on an offset chunk fills absent cols without inflating rows")
+
     print("selftest OK — both layouts normalize to the expected typed schema")
     return 0
 

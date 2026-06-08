@@ -43,7 +43,7 @@ def clean_frame(df: pd.DataFrame, era: str) -> pd.DataFrame:
     schema = SCHEMAS[era]
     out = {}
     for field in schema:
-        col = df[field.name] if field.name in df.columns else pd.Series([pd.NA] * len(df))
+        col = df[field.name] if field.name in df.columns else pd.Series(pd.NA, index=df.index)
         out[field.name] = _coerce(col, field.type)
     return pd.DataFrame(out, columns=schema_columns(era))
 

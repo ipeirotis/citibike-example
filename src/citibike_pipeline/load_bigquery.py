@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from google.api_core.exceptions import NotFound
 from google.cloud import bigquery
 
 from . import config, gcsio
@@ -67,7 +68,9 @@ def _has_parquet(prefix: str) -> bool:
 def ensure_external_tables(client: bigquery.Client) -> list[tuple[str, str]]:
     """Create/replace an external table for every (region, era) prefix that has Parquet.
 
-    Returns the (region, era) pairs that now have a live table.
+    Uses CREATE OR REPLACE EXTERNAL TABLE so the swap is atomic — the live source
+    table is never dropped before its replacement exists. Returns the (region, era)
+    pairs that now have a live table.
     """
     live: list[tuple[str, str]] = []
     for (region, era), name in config.EXTERNAL_TABLES.items():
@@ -75,13 +78,13 @@ def ensure_external_tables(client: bigquery.Client) -> list[tuple[str, str]]:
         if not _has_parquet(prefix):
             print(f"  - {name}: no Parquet under {prefix} yet, skipping")
             continue
-        ext = bigquery.ExternalConfig("PARQUET")
-        ext.source_uris = [config.gcs_uri(prefix, "*.parquet")]
-        table = bigquery.Table(config.table_id(name))
-        table.external_data_configuration = ext
-        client.delete_table(config.table_id(name), not_found_ok=True)
-        client.create_table(table)
-        print(f"  + {name}  ->  {ext.source_uris[0]}")
+        uri = config.gcs_uri(prefix, "*.parquet")
+        client.query(
+            f"CREATE OR REPLACE EXTERNAL TABLE `{config.table_id(name)}`\n"
+            f"OPTIONS (format = 'PARQUET', uris = ['{uri}'])",
+            location=config.LOCATION,
+        ).result()
+        print(f"  + {name}  ->  {uri}")
         live.append((region, era))
     return live
 
@@ -92,7 +95,7 @@ def build_unified_view(client: bigquery.Client) -> None:
     for (region, era), name in config.EXTERNAL_TABLES.items():
         try:
             client.get_table(config.table_id(name))
-        except Exception:
+        except NotFound:
             continue
         branches.append(_BRANCH[era].format(region=region, table=config.table_id(name)))
     if not branches:
