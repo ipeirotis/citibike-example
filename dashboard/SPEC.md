@@ -42,8 +42,7 @@ can join against the weather table instead.
 
 ## What "great" looks like
 - **Clear at a glance, deep on demand.**
-- **Trustworthy** — handles the data's rough edges gracefully (for instance, the most
-  recent days have no weather yet; don't let that distort the picture).
+- **Trustworthy** — handles the data's rough edges gracefully.
 - **Responsive** — interactions feel instant.
 - **Polished and readable** — coherent visual design, clean code.
 - **Actually deployed** — live at a public URL, not just running on a laptop.
