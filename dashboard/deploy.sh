@@ -37,6 +37,7 @@ gcloud run deploy "$SERVICE" \
   --memory 1Gi \
   --cpu 1 \
   --timeout 120 \
+  --session-affinity \
   --set-env-vars "BQ_PROJECT=${PROJECT}"
 
 echo "==> Done. Service URL:"

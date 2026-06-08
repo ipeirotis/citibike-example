@@ -10,3 +10,5 @@ gatherUsageStats = false
 headless = true
 enableCORS = false
 enableXsrfProtection = false
+# Cloud Run / proxies can mishandle permessage-deflate on the Streamlit websocket.
+enableWebsocketCompression = false

@@ -4,6 +4,9 @@ A [Streamlit](https://streamlit.io) dashboard visualizing the effect of NYC
 weather on Citibike ridership across the full **2013 → present** history, designed
 to run on **Google Cloud Run**.
 
+**Live:** <https://citibike-weather-dashboard-1062917065927.us-central1.run.app>
+(Cloud Run · `us-central1` · public · runtime SA `claude-agent`).
+
 It reads a single BigQuery view —
 `nyu-datasets.citibike.daily_trips_weather` — which joins the daily trip
 aggregates (`m_daily_trips`, built from the canonical `m_trips_unified`) to NYC
