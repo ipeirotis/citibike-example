@@ -1,0 +1,6 @@
+# Citibike ETL pipeline — Python 3.11+
+pandas>=2.0
+pyarrow>=14.0
+google-cloud-storage>=2.10
+google-cloud-bigquery>=3.11
+requests>=2.31
