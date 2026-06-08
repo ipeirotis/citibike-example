@@ -1,6 +1,6 @@
 """Stage 4 — daily marts for the weather-effects dashboard.
 
-Builds, on top of the canonical ``m_trips_unified`` snapshot:
+Builds, on top of the canonical ``trips_unified`` view:
 
 * ``daily_trips``           — one row per calendar day (counts, splits, durations)
 * ``m_daily_trips``         — native snapshot of that view (what the dashboard reads)
@@ -32,6 +32,10 @@ SELECT
   COUNT(*)                                                  AS num_trips,
   COUNTIF(member_casual = 'member')                         AS num_member_trips,
   COUNTIF(member_casual = 'casual')                         AS num_casual_trips,
+  COUNTIF(region = 'NYC' AND member_casual = 'member')      AS num_member_trips_nyc,
+  COUNTIF(region = 'NYC' AND member_casual = 'casual')      AS num_casual_trips_nyc,
+  COUNTIF(region = 'JC'  AND member_casual = 'member')      AS num_member_trips_jc,
+  COUNTIF(region = 'JC'  AND member_casual = 'casual')      AS num_casual_trips_jc,
   COUNTIF(region = 'NYC')                                   AS num_nyc_trips,
   COUNTIF(region = 'JC')                                    AS num_jc_trips,
   COUNTIF(rideable_type = 'classic_bike')                   AS num_classic_trips,
@@ -63,10 +67,10 @@ def _client() -> bigquery.Client:
 
 
 def build_daily_view(client: bigquery.Client) -> None:
-    """Deploy the daily_trips aggregation view over m_trips_unified."""
+    """Deploy the daily_trips aggregation view over trips_unified."""
     sql = _DAILY_SQL.format(
         view=config.table_id(config.DAILY_VIEW),
-        source=config.table_id(config.UNIFIED_TABLE),
+        source=config.table_id(config.UNIFIED_VIEW),
         cutover=config.CURRENT_ERA_START,
     )
     client.query(sql, location=config.LOCATION).result()

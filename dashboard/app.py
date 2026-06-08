@@ -47,8 +47,6 @@ def load_data() -> pd.DataFrame:
     df["condition"] = "Dry"
     df.loc[df["is_rainy"] == 1, "condition"] = "Rainy"
     df.loc[df["is_snowy"] == 1, "condition"] = "Snowy"
-    # Casual share of ridership — the most weather-sensitive segment.
-    df["pct_casual"] = (df["num_casual_trips"] / df["num_trips"] * 100).round(1)
     return df
 
 
@@ -71,6 +69,17 @@ TRIPS_COL = {
     "NYC only": "num_nyc_trips",
     "Jersey City only": "num_jc_trips",
 }[region]
+# Member/casual counts for the active region, so the Riders tab honors the filter.
+MEMBER_COL = {
+    "NYC + Jersey City": "num_member_trips",
+    "NYC only": "num_member_trips_nyc",
+    "Jersey City only": "num_member_trips_jc",
+}[region]
+CASUAL_COL = {
+    "NYC + Jersey City": "num_casual_trips",
+    "NYC only": "num_casual_trips_nyc",
+    "Jersey City only": "num_casual_trips_jc",
+}[region]
 
 show_weekends = st.sidebar.radio("Days", ["All days", "Weekdays only", "Weekends only"])
 
@@ -87,8 +96,20 @@ if show_weekends == "Weekdays only":
     mask &= df["is_weekend"] == 0
 elif show_weekends == "Weekends only":
     mask &= df["is_weekend"] == 1
+# Restrict each region slice to its active span — Jersey City data starts in 2015,
+# so otherwise its pre-launch days would enter as fake zero-trip observations.
+launch = df.loc[df[TRIPS_COL] > 0, "date"].min()
+mask &= df["date"] >= launch
 d = df.loc[mask].copy()
+if d.empty:
+    st.title("How weather moves Citibike ridership")
+    st.info(f"No {region} data in {yr_lo}–{yr_hi}. Jersey City data begins in 2015 — widen the year range.")
+    st.stop()
 d["trips"] = d[TRIPS_COL]
+d["member"] = d[MEMBER_COL]
+d["casual"] = d[CASUAL_COL]
+# Casual share of the active region's trips (the most weather-sensitive segment).
+d["pct_casual"] = np.where(d["trips"] > 0, d["casual"] / d["trips"] * 100, np.nan)
 dw = d.dropna(subset=["tavg_f"])  # rows that actually have weather
 
 # --------------------------------------------------------------------------- header
@@ -118,7 +139,7 @@ tab_overview, tab_temp, tab_precip, tab_riders, tab_seasonal = st.tabs(
 with tab_overview:
     st.subheader("Daily ridership and temperature move together")
     roll = d.set_index("date").sort_index()
-    roll["trips_30d"] = roll["trips"].rolling(30, min_periods=7).mean()
+    roll["trips_30d"] = roll["trips"].rolling("30D", min_periods=7).mean()
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=roll.index, y=roll["trips"], name="Daily trips",
                              line=dict(color="#C7D9F0", width=1), opacity=0.6))
@@ -210,7 +231,6 @@ with tab_precip:
 # --------------------------------------------------------------------------- riders
 with tab_riders:
     st.subheader("Casual riders are far more weather-sensitive than members")
-    st.caption("Member/casual splits are dataset-wide (NYC + Jersey City); the region filter does not apply here.")
     c1, c2 = st.columns([3, 2])
     with c1:
         fig = px.scatter(
@@ -225,9 +245,9 @@ with tab_riders:
     with c2:
         bands = pd.cut(dw["tavg_f"], [-100, 32, 50, 65, 80, 200],
                        labels=["<32°F", "32–50°F", "50–65°F", "65–80°F", "80°F+"])
-        mix = dw.groupby(bands, observed=True)[["num_member_trips", "num_casual_trips"]].mean().reset_index()
+        mix = dw.groupby(bands, observed=True)[["member", "casual"]].mean().reset_index()
         mix = mix.melt(id_vars="tavg_f", var_name="rider", value_name="trips")
-        mix["rider"] = mix["rider"].map({"num_member_trips": "Member", "num_casual_trips": "Casual"})
+        mix["rider"] = mix["rider"].map({"member": "Member", "casual": "Casual"})
         fig = px.bar(mix, x="tavg_f", y="trips", color="rider", barmode="group",
                      color_discrete_map={"Member": "#4C78A8", "Casual": "#E45756"},
                      labels={"tavg_f": "Temperature band", "trips": "Avg trips / day", "rider": ""})

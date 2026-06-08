@@ -206,7 +206,7 @@ that powers a weather-effects dashboard. Three BigQuery objects in `nyu-datasets
 
 | Object | Type | What |
 |---|---|---|
-| `daily_trips` | view | One row per local calendar day over `m_trips_unified`: trip counts (total, member/casual, NYC/JC, classic/electric), and average/median duration + average distance. |
+| `daily_trips` | view | One row per local calendar day over `trips_unified`: trip counts (total, member/casual both overall and per region, NYC/JC, classic/electric), and average/median duration + average distance. |
 | `m_daily_trips` | table | Native snapshot of `daily_trips` (~4.7k rows, 2013-06-01 → present). What the dashboard reads. |
 | `daily_trips_weather` | view | `m_daily_trips` LEFT JOIN `nyu-datasets.weather.m_weather_daily_nyc` on `date`. The dashboard's single source. |
 
@@ -216,7 +216,7 @@ Two subtleties, both pinned in `sql/daily_trips.sql`:
   wall-clock time — the trip-hour histogram peaks at 08:00 and 17:00 with no UTC shift — so
   `DATE(start_time)` is already the local calendar day and lines up 1:1 with the NYC weather
   dates. **Do not** apply a timezone conversion.
-- **January-2021 de-duplication.** `m_trips_unified` double-loads Jan 2021: the 2021 annual
+- **January-2021 de-duplication.** `trips_unified` double-loads Jan 2021: the 2021 annual
   archive ships it in the legacy layout and Citibike *also* re-published it in the current
   layout (≈1.1M trips twice), plus ~1.5k stray current-era rows in 2019–2020 with corrupt
   timestamps. The current layout's canonical data begins `CURRENT_ERA_START` (2021-02-01);
