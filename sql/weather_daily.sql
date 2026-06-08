@@ -82,7 +82,8 @@ CREATE OR REPLACE VIEW `nyu-datasets.weather.weather_daily`
   wind_dir_deg OPTIONS(description="Direction of the fastest 2-minute wind, degrees clockwise from true north 0-360 (GHCN-D WDF2); NULL when not reported."),
   is_foggy OPTIONS(description="1 if fog, ice fog, or freezing fog was observed (GHCN-D WT01), else 0."),
   is_thunder OPTIONS(description="1 if thunder was observed (GHCN-D WT03), else 0."),
-  is_hazy OPTIONS(description="1 if smoke or haze was observed (GHCN-D WT08), else 0.")
+  is_hazy OPTIONS(description="1 if smoke or haze was observed (GHCN-D WT08), else 0."),
+  station_id OPTIONS(description="GHCN-Daily station identifier (e.g. 'USW00094728' = NY CITY CNTRL PARK). The stable key for a station, robust to display-name changes.")
 )
 OPTIONS(description="Daily weather summaries for all US GHCN-Daily stations, one row per station per day. Superset of useful elements (temperature, precipitation, snow, snow depth, humidity, dew point, wet-bulb, pressure, wind, weather-type flags) in metric and imperial units, joined to ZIP/city/county. Source: bigquery-public-data.ghcn_d. Humidity/dew-point/wet-bulb/pressure come from ASOS stations in recent years only and are NULL elsewhere.")
 AS
@@ -155,6 +156,9 @@ Daily_Weather AS (
     -- Cover the full GHCN-D record, including 19th-century stations (e.g. Central
     -- Park's history back to 1869).
     _TABLE_SUFFIX BETWEEN '1750' AND '2030'
+    -- US stations only (the final join keeps US-only anyway); filtering here
+    -- avoids aggregating every global station before the join.
+    AND id LIKE 'US%'
     AND element IN ('TMIN', 'TMAX', 'TAVG', 'PRCP', 'SNOW',
                     'SNWD', 'RHAV', 'RHMN', 'RHMX', 'ADPT', 'AWBT',
                     'ASLP', 'ASTP', 'AWND', 'WSF2', 'WDF2',
@@ -226,6 +230,7 @@ SELECT
   -- Weather-type flags (1 = phenomenon observed that day).
   W.is_foggy,
   W.is_thunder,
-  W.is_hazy
+  W.is_hazy,
+  M.station_id
 FROM Daily_Weather W
 JOIN Station_Map M ON W.station_id = M.station_id

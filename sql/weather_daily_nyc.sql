@@ -58,5 +58,5 @@ SELECT
     wind_avg_mph, wind_gust_mph, wind_dir_deg,
     is_foggy, is_thunder, is_hazy
   FROM `nyu-datasets.weather.weather_daily`
-  WHERE station_name = 'NY CITY CNTRL PARK'
+  WHERE station_id = 'USW00094728'  -- stable GHCN-D id for NY CITY CNTRL PARK
   ORDER BY date DESC
