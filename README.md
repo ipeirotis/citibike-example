@@ -29,7 +29,17 @@ make mirror      # Stage 1: Citibike S3 -> gs://citibike-archive/raw/zip/  (idem
 make extract     # Stage 2: raw ZIPs -> typed Parquet in GCS
 make unify       # Stage 3: external tables + the unified trips_unified view
 # make materialize   # optional: snapshot trips_unified into native `m_trips_unified`
+make daily       # Stage 4: daily_trips + m_daily_trips + daily_trips_weather (dashboard marts)
 ```
+
+## Weather-effects dashboard
+
+A [Streamlit](https://streamlit.io) dashboard in [`dashboard/`](dashboard/) visualizes
+the effect of NYC weather on ridership (2013 → present) from
+`nyu-datasets.citibike.daily_trips_weather` — the daily trips (`m_daily_trips`) joined to
+NYC daily weather. Run it locally with `streamlit run dashboard/app.py`, or deploy to Google
+Cloud Run with `bash dashboard/deploy.sh` (see [`dashboard/README.md`](dashboard/README.md)
+for the required roles/APIs).
 
 Scope a run with `--region {nyc,jc,all}` and `--limit N` (e.g.
 `python -m citibike_pipeline.mirror_raw --region jc --limit 1` for a smoke test), or
@@ -43,6 +53,7 @@ Scope a run with `--region {nyc,jc,all}` and `--limit N` (e.g.
 | BigQuery | `nyu-datasets.citibike` (region `US`) |
 | Unified view | `nyu-datasets.citibike.trips_unified` |
 | Materialized | `nyu-datasets.citibike.m_trips_unified` |
+| Daily marts | `daily_trips`, `m_daily_trips`, `daily_trips_weather` |
 
 Built on the proof-of-concept notebooks at
 [ipeirotis-org/datasets/Citibike](https://github.com/ipeirotis-org/datasets/tree/main/Citibike).

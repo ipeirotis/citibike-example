@@ -1,0 +1,8 @@
+# Citibike × Weather dashboard (Streamlit on Cloud Run)
+streamlit>=1.50
+google-cloud-bigquery>=3.20
+db-dtypes>=1.2          # BigQuery DATE/NUMERIC -> pandas in to_dataframe()
+pandas>=2.0
+pyarrow>=14.0
+plotly>=5.22
+statsmodels>=0.14       # lowess/OLS trendlines in plotly express
