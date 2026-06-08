@@ -47,8 +47,9 @@ EXTERNAL_TABLES = {
 # The improved, lossless union. Left as a separate object so the original
 # `all_trips` view (prior art) is never clobbered.
 UNIFIED_VIEW = "trips_unified"
-# Optional materialization of the view into a native table.
-UNIFIED_TABLE = "trips"
+# Materialization of the view into a native table. Convention: the view's name
+# with an `m_` prefix (matches the dataset's existing all_trips / m_all_trips).
+UNIFIED_TABLE = "m_trips_unified"
 
 
 def gcs_uri(*parts: str) -> str:

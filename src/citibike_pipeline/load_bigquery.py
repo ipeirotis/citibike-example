@@ -7,7 +7,7 @@ grows to cover Jersey City automatically once JC Parquet has been loaded.
 
     python -m citibike_pipeline.load_bigquery external     # (re)create external tables
     python -m citibike_pipeline.load_bigquery view         # deploy trips_unified
-    python -m citibike_pipeline.load_bigquery materialize  # CTAS native `trips`
+    python -m citibike_pipeline.load_bigquery materialize  # CTAS native `m_trips_unified`
     python -m citibike_pipeline.load_bigquery all
 """
 from __future__ import annotations

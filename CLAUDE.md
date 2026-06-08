@@ -40,7 +40,7 @@ GCS  .../tripdata/parquet/  .../rides/parquet/  (+ jc/…)    typed Parquet
 BigQuery  nyu-datasets.citibike
         │  trips_2013_2021 + trips_2021_now (+ JC)  ──reconcile eras──►
         ▼
-   trips_unified  (canonical superset view; materializable as `trips`)
+   trips_unified  (canonical superset view; materialized as `m_trips_unified`)
 ```
 
 Stage 1 (mirror raw ZIPs into GCS before any parsing) makes the pipeline
@@ -179,7 +179,7 @@ Three stages, each a CLI module run via the `Makefile`. Cloud auth is automatic
 |---|---|---|
 | 1 — mirror | `make mirror` / `mirror-jc` | Byte-for-byte copy of every Citibike `*.zip` into `gs://citibike-archive/raw/zip/`. Idempotent (skips files already present with matching size). **Downstream reads raw from here, never S3.** |
 | 2 — extract | `make extract` / `extract-jc` | For each raw ZIP, detect each CSV's layout from its header, normalize + type, write Parquet to the region/era prefix. Chunked, so multi-GB annual CSVs stay in memory budget. |
-| 3 — load | `make unify` (`external` + `view`) | (Re)create external tables over the Parquet and deploy `trips_unified`. `make materialize` snapshots it into native `trips`. |
+| 3 — load | `make unify` (`external` + `view`) | (Re)create external tables over the Parquet and deploy `trips_unified`. `make materialize` snapshots it into native `m_trips_unified`. |
 
 **Fidelity to the reference notebooks.** Stage 2 follows `Copy_Citibike_Trips*.ipynb`
 where it matters — the column-rename map, the `NULL`/`\N`→null and trailing-`.0`
@@ -228,6 +228,8 @@ the repo so every Claude Code session can re-authenticate without manual steps.
 - Detect CSV layout from the header, not the filename year.
 - Keep raw archives immutable in GCS; do transformations downstream (Parquet/BigQuery)
   so a reload is always reproducible from the bucket.
+- A materialized view/table mirrors its view's name with an `m_` prefix
+  (`trips_unified` → `m_trips_unified`), matching the dataset's `all_trips` / `m_all_trips`.
 
 ## Reference material
 

@@ -28,7 +28,7 @@ hook activates the service account). Then:
 make mirror      # Stage 1: Citibike S3 -> gs://citibike-archive/raw/zip/  (idempotent)
 make extract     # Stage 2: raw ZIPs -> typed Parquet in GCS
 make unify       # Stage 3: external tables + the unified trips_unified view
-# make materialize   # optional: snapshot trips_unified into a native `trips` table
+# make materialize   # optional: snapshot trips_unified into native `m_trips_unified`
 ```
 
 Scope a run with `--region {nyc,jc,all}` and `--limit N` (e.g.
@@ -42,6 +42,7 @@ Scope a run with `--region {nyc,jc,all}` and `--limit N` (e.g.
 | GCS bucket | `gs://citibike-archive` (`raw/zip/`, `tripdata/parquet/`, `rides/parquet/`, `jc/…`) |
 | BigQuery | `nyu-datasets.citibike` (region `US`) |
 | Unified view | `nyu-datasets.citibike.trips_unified` |
+| Materialized | `nyu-datasets.citibike.m_trips_unified` |
 
 Built on the proof-of-concept notebooks at
 [ipeirotis-org/datasets/Citibike](https://github.com/ipeirotis-org/datasets/tree/main/Citibike).

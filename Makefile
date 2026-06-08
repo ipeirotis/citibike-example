@@ -41,7 +41,7 @@ external:      ## Stage 3: (re)create BigQuery external tables over the Parquet
 view:          ## Stage 3: deploy the unified trips_unified view
 	$(WITH) $(PY) -m citibike_pipeline.load_bigquery view
 
-materialize:   ## Stage 3: snapshot the view into the native `trips` table
+materialize:   ## Stage 3: snapshot the view into the native `m_trips_unified` table
 	$(WITH) $(PY) -m citibike_pipeline.load_bigquery materialize
 
 unify: external view  ## Stage 3: external tables + unified view
