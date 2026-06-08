@@ -76,7 +76,7 @@ def ensure_external_tables(client: bigquery.Client) -> list[tuple[str, str]]:
             print(f"  - {name}: no Parquet under {prefix} yet, skipping")
             continue
         ext = bigquery.ExternalConfig("PARQUET")
-        ext.source_uris = [config.gcs_uri(prefix) + "*.parquet"]
+        ext.source_uris = [config.gcs_uri(prefix, "*.parquet")]
         table = bigquery.Table(config.table_id(name))
         table.external_data_configuration = ext
         client.delete_table(config.table_id(name), not_found_ok=True)

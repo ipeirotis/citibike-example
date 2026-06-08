@@ -14,7 +14,9 @@ set -euo pipefail
 KEY="${GCP_CREDENTIALS_KEY:-${CLOUD_CREDENTIALS_KEY:-}}"
 ENC=".cloud-credentials.$(git config user.email).enc"
 if [ -z "$KEY" ] || [ ! -f "$ENC" ]; then
-  echo "with-credentials: need GCP_CREDENTIALS_KEY (or CLOUD_CREDENTIALS_KEY) and $ENC" >&2
+  echo "with-credentials: no usable cloud credentials for this git identity ($(git config user.email))." >&2
+  echo "  need env GCP_CREDENTIALS_KEY (or CLOUD_CREDENTIALS_KEY) and key file $ENC" >&2
+  echo "  this repo uses per-user encrypted keys; see CLAUDE.md (\"Add a teammate\") to provision one." >&2
   exit 1
 fi
 
@@ -32,4 +34,8 @@ if [ -f "$CA" ]; then
 fi
 export PYTHONPATH="${PYTHONPATH:-src}"
 
-exec "$@"
+# Run (do not exec) the target command so the EXIT trap above can shred the
+# decrypted key afterward — exec would replace this shell and skip the trap.
+status=0
+"$@" || status=$?
+exit "$status"
