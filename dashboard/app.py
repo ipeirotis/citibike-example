@@ -240,7 +240,8 @@ with tab_riders:
 with tab_seasonal:
     st.subheader("Seasonality and growth at a glance")
     pivot = (d.assign(month=d["date"].dt.month)
-               .pivot_table(index="month", columns="year", values="trips", aggfunc="mean"))
+               .pivot_table(index="month", columns="year", values="trips", aggfunc="mean")
+               .reindex(range(1, 13)))  # always 12 rows so the month labels line up
     fig = px.imshow(
         pivot, aspect="auto", color_continuous_scale="YlGnBu",
         labels=dict(x="Year", y="Month", color="Avg trips/day"),
