@@ -231,10 +231,10 @@ a day's trips as a percent of the surrounding ~month's norm — so a weather eff
 growth and seasonality. The `daily_trips_weather` view selects `d.* EXCEPT(date)`, so new
 weather columns flow through to the dashboard automatically. It is built to run on **Google
 Cloud Run**: `bash dashboard/deploy.sh` enables the needed APIs and deploys from source. The
-pipeline's `claude-agent` SA can read BigQuery but **lacks** Cloud Run / Cloud
-Build / Service Usage roles, so the deploy must be run by a project owner/editor (or the
-deployer roles in `dashboard/README.md`). Re-run `make daily` after re-materializing
-`m_trips_unified` to refresh the dashboard's data.
+pipeline's `claude-agent` SA now also holds the deployer capabilities (Cloud Run, Cloud Build,
+Service Usage, and `actAs` on the runtime SA), so it can run the deploy itself — the live
+revision was deployed by it. Re-run `make daily` after re-materializing `m_trips_unified` to
+refresh the dashboard's data.
 
 ## Cloud access (credentials)
 

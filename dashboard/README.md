@@ -69,10 +69,10 @@ bash deploy.sh          # override with PROJECT=… REGION=… SERVICE=… RUNTI
 | **Deployer** (whoever runs `deploy.sh`) | `roles/run.admin`, `roles/cloudbuild.builds.editor`, `roles/artifactregistry.admin`, `roles/iam.serviceAccountUser` on the runtime SA, `roles/serviceusage.serviceUsageAdmin` (to enable APIs) | Build the image and create the Cloud Run service |
 | **Runtime SA** (`--service-account`) | `roles/bigquery.jobUser` on the project + `roles/bigquery.dataViewer` on the `citibike` **and** `weather` datasets | Let the running app query the view |
 
-> The pipeline's `claude-agent` service account has BigQuery access but **not** the
-> Cloud Run / Cloud Build / Service Usage roles, so it cannot run `deploy.sh`. Run
-> it as a project owner/editor (or grant the deployer roles above), or build and
-> deploy the image from your own machine.
+> The pipeline's `claude-agent` service account now holds the deployer capabilities
+> above (Cloud Run, Cloud Build, Service Usage, and `actAs` on the runtime SA) in
+> addition to its BigQuery access, so it can run `deploy.sh` itself — the live
+> revision is deployed by it. Any principal with the roles above can deploy too.
 
 The service is deployed `--allow-unauthenticated` (a public read-only dashboard).
 Drop that flag to require IAM-authenticated access instead.
