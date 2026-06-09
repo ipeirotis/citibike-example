@@ -228,8 +228,11 @@ visualizes ridership against the weather (2013 → present): temperature, rain, 
 depth), wind, humidity/dew point, and condition flags (fog, thunder, haze). For the
 season-correlated variables (wind, humidity, storms) it uses a detrended *ridership index* —
 a day's trips as a percent of the surrounding ~month's norm — so a weather effect reads net of
-growth and seasonality. The `daily_trips_weather` view selects `d.* EXCEPT(date)`, so new
-weather columns flow through to the dashboard automatically. It is built to run on **Google
+growth and seasonality. The index is still *marginal* (a windy day is also a cold day), so the
+**Impact** tab adds true attribution via `dashboard/attribution.py`: a regression of
+log-ridership on month fixed effects + day-of-week + holidays + all weather (Newey–West SEs)
+reporting each factor's *partial* effect. The `daily_trips_weather` view selects
+`d.* EXCEPT(date)`, so new weather columns flow through to the dashboard automatically. It is built to run on **Google
 Cloud Run**: `bash dashboard/deploy.sh` enables the needed APIs and deploys from source. The
 pipeline's `claude-agent` SA now also holds the deployer capabilities (Cloud Run, Cloud Build,
 Service Usage, and `actAs` on the runtime SA), so it can run the deploy itself — the live

@@ -21,6 +21,8 @@ import plotly.graph_objects as go
 import streamlit as st
 from google.cloud import bigquery
 
+import attribution
+
 PROJECT = os.environ.get("BQ_PROJECT", "nyu-datasets")
 SOURCE = os.environ.get("DASHBOARD_SOURCE", "nyu-datasets.citibike.daily_trips_weather")
 
@@ -31,6 +33,15 @@ SEASON_COLORS = {"Winter": "#4C78A8", "Spring": "#54A24B", "Summer": "#E45756", 
 COND_COLORS = {"Dry": "#54A24B", "Rainy": "#4C78A8", "Snowy": "#B279A2"}
 # Diverging colours for the "% vs. normal" impact bars (below / above the norm).
 NEG_COLOR, POS_COLOR = "#C44E52", "#55A868"
+# Per-factor colours for the regression "isolated impact" chart.
+IMPACT_COLORS = {
+    "Temperature (vs 55–65°F)": "#E45756",
+    "Rain (vs dry)": "#4C78A8",
+    "Snow": "#72B7B2",
+    "Wind": "#54A24B",
+    "Storms (vs same rain/temp)": "#B279A2",
+    "Humidity (warm days, 2016–24)": "#F58518",
+}
 
 
 # --------------------------------------------------------------------------- data
@@ -53,6 +64,17 @@ def load_data() -> pd.DataFrame:
 
 
 df = load_data()
+
+
+@st.cache_data(ttl=3600, show_spinner="Fitting weather-impact model…")
+def weather_impacts(trips_col: str):
+    """Partial weather effects for a region (cached). See attribution.py.
+
+    Fit over the region's full history — independent of the year/weekday filters —
+    so the model stays well-identified; `trips_col` is the only thing that varies it.
+    """
+    return attribution.fit_impacts(df, trips_col)
+
 
 # --------------------------------------------------------------------------- sidebar
 st.sidebar.title("🚲 Citibike × Weather")
@@ -148,9 +170,10 @@ if len(dw):
     k[3].metric("Warm vs. cold day", f"{ratio:,.1f}×" if np.isfinite(ratio) else "—",
                 help="Avg trips on warm days (≥65°F) ÷ cold days (<40°F).")
 
-tab_overview, tab_temp, tab_precip, tab_wind, tab_humid, tab_riders, tab_seasonal = st.tabs(
-    ["📈 Overview", "🌡️ Temperature", "🌧️ Rain & Snow", "🌬️ Wind", "💧 Humidity",
-     "🧍 Riders", "🗓️ Seasonality"]
+(tab_overview, tab_impact, tab_temp, tab_precip, tab_wind, tab_humid,
+ tab_riders, tab_seasonal) = st.tabs(
+    ["📈 Overview", "🎯 Impact", "🌡️ Temperature", "🌧️ Rain & Snow", "🌬️ Wind",
+     "💧 Humidity", "🧍 Riders", "🗓️ Seasonality"]
 )
 
 # --------------------------------------------------------------------------- overview
@@ -222,7 +245,54 @@ with tab_overview:
             "monthly norm). Snow and heavy rain hit hardest — roughly a third fewer "
             "rides — followed by strong winds and snow lingering on the ground. Hot "
             "days barely register: New Yorkers tolerate heat far better than cold, wet, "
-            "or wind."
+            "or wind. These are raw comparisons that still mix correlated weather (windy "
+            "days are also cold) — the **🎯 Impact** tab isolates each factor on its own."
+        )
+
+# --------------------------------------------------------------------------- impact
+with tab_impact:
+    st.subheader("The isolated effect of each weather factor")
+    st.markdown(
+        "The other tabs compare a day with its surrounding month — honest about growth and "
+        "seasonality, but still **bundling correlated weather** (windy days are also cold, "
+        "storm days are also wet). Here a single regression separates them: each bar is the "
+        "change in daily ridership from that factor *alone*, holding the month, day-of-week, "
+        "holidays and every other weather variable constant."
+    )
+    try:
+        eff, meta = weather_impacts(TRIPS_COL)
+    except Exception as exc:  # a singular design / thin slice shouldn't crash the app
+        st.warning(f"Could not fit the impact model for this selection ({exc}).")
+        eff = None
+    if eff is not None and not eff.empty:
+        eff = eff.sort_values("pct")
+        eff["err_plus"] = eff["hi"] - eff["pct"]
+        eff["err_minus"] = eff["pct"] - eff["lo"]
+        fig = px.bar(
+            eff, x="pct", y="label", orientation="h", color="group",
+            color_discrete_map=IMPACT_COLORS, error_x="err_plus", error_x_minus="err_minus",
+            category_orders={"label": eff["label"].tolist()},
+            labels={"pct": "Isolated effect on daily ridership (%)", "label": "", "group": ""},
+        )
+        fig.add_vline(x=0, line_color="#444")
+        fig.update_layout(height=560, legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                          margin=dict(t=10, b=0, l=0, r=10))
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "95% confidence whiskers (Newey–West SEs, which account for day-to-day "
+            f"autocorrelation). Calendar controls — trend, season and weekday — already "
+            f"explain {meta['r2_controls']:.0%} of ridership; weather then explains "
+            f"{meta['weather_partial_r2']:.0%} of what remains. Fit over the full "
+            f"{region.replace(' only', '')} history ({meta['n']:,} days); humidity is "
+            "Central Park 2016–2024 only."
+        )
+        st.info(
+            "**Why this differs from the raw tabs.** Windy days read ~−22% there, but their "
+            "isolated effect is about half that — the rest is the cold that travels with wind. "
+            "Thunderstorms read −10% yet come out **positive** here: once the rain they bring "
+            "is accounted for, what's left are busy warm afternoons. Snow and heavy rain, "
+            "conversely, come out *stronger* once isolated — a multi-day storm drags down its "
+            "own monthly baseline, so the simple comparison understates it."
         )
 
 # --------------------------------------------------------------------------- temperature
@@ -335,7 +405,9 @@ with tab_wind:
         "the surrounding month's norm — so the effect is net of season (winter is both "
         "colder *and* windier). Calm and breezy days ride near normal; once the daily "
         "average tops ~9 mph ridership drops off, and the windiest days (13 mph+, "
-        "gusting 30–40 mph) run little more than half their usual volume."
+        "gusting 30–40 mph) run little more than half their usual volume. Some of that "
+        "gap is the cold that rides along with wind; the **🎯 Impact** tab puts wind's "
+        "own isolated effect at about half this."
     )
 
 # --------------------------------------------------------------------------- humidity
@@ -456,6 +528,14 @@ trips as a percent of the surrounding ~month's typical trips (a centered 29-day
 median of the selected region's daily series). It nets out the network's growth and
 the seasonal cycle, so a weather effect can be read on its own even though wind,
 humidity and storms are themselves correlated with the seasons.
+
+The **🎯 Impact tab** goes a step further. The index is still a *marginal* comparison —
+a windy day is also a cold day — so it fits one regression (`attribution.py`):
+log-ridership on month fixed effects (trend + season + COVID), day-of-week, holidays
+and all weather together, with Newey–West standard errors for the day-to-day
+autocorrelation. Each coefficient is a *partial* effect — the impact of that factor
+with the others held constant — which is what separates wind from the cold it rides
+with, and turns thunderstorms from apparently-negative to positive.
 
 Day keys use Citibike's local (America/New_York) calendar date, and January 2021
 is de-duplicated (Citibike published it in both the legacy and current layouts).
