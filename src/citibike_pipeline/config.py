@@ -51,6 +51,25 @@ UNIFIED_VIEW = "trips_unified"
 # with an `m_` prefix (matches the dataset's existing all_trips / m_all_trips).
 UNIFIED_TABLE = "m_trips_unified"
 
+# --- Stage 4: daily marts for the weather-effects dashboard -------------------
+# One row per calendar day aggregated from m_trips_unified, the weather-join view
+# the Streamlit dashboard reads, and the materialized snapshots (`m_` prefix).
+DAILY_VIEW = "daily_trips"
+DAILY_TABLE = "m_daily_trips"
+DAILY_WEATHER_VIEW = "daily_trips_weather"
+
+# Daily NYC weather lives in a sibling dataset (same project + US location).
+WEATHER_DATASET = os.environ.get("CITIBIKE_WEATHER_DATASET", "weather")
+WEATHER_DAILY_TABLE = "m_weather_daily_nyc"
+
+# trips_unified double-counts January 2021 — the 2021 annual archive ships that
+# month in the legacy layout and Citibike *also* re-published it in the current
+# layout, so both copies loaded — plus ~1.5k stray current-era rows in 2019-2020
+# carrying corrupt timestamps. The current layout's canonical data begins here;
+# legacy (which cleanly ends 2021-01-31) owns every earlier day. daily_trips uses
+# this to keep each calendar day in exactly one era per region.
+CURRENT_ERA_START = "2021-02-01"
+
 
 def gcs_uri(*parts: str) -> str:
     """Join a GCS path under the project bucket: gcs_uri('raw', 'zip') -> gs://.../raw/zip."""
@@ -61,6 +80,11 @@ def gcs_uri(*parts: str) -> str:
 def table_id(name: str) -> str:
     """Fully-qualified BigQuery table id: `project.dataset.name`."""
     return f"{PROJECT}.{DATASET}.{name}"
+
+
+def weather_table_id(name: str) -> str:
+    """Fully-qualified id for an object in the sibling `weather` dataset."""
+    return f"{PROJECT}.{WEATHER_DATASET}.{name}"
 
 
 def region_of(filename: str) -> str:

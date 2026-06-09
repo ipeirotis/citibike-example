@@ -1,0 +1,14 @@
+[theme]
+primaryColor = "#1F4E96"
+base = "light"
+font = "sans serif"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+# Cloud Run / proxies can mishandle permessage-deflate on the Streamlit websocket.
+enableWebsocketCompression = false

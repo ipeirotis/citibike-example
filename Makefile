@@ -6,7 +6,7 @@ PY   := .venv/bin/python
 WITH := bash scripts/with-credentials.sh
 export PYTHONPATH := src
 
-.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify
+.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify daily-view daily-materialize daily-weather daily
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -45,3 +45,15 @@ materialize:   ## Stage 3: snapshot the view into the native `m_trips_unified` t
 	$(WITH) $(PY) -m citibike_pipeline.load_bigquery materialize
 
 unify: external view  ## Stage 3: external tables + unified view
+
+daily-view:    ## Stage 4: deploy the daily_trips aggregation view
+	$(WITH) $(PY) -m citibike_pipeline.analytics daily-view
+
+daily-materialize: ## Stage 4: snapshot daily_trips into native m_daily_trips
+	$(WITH) $(PY) -m citibike_pipeline.analytics daily-materialize
+
+daily-weather: ## Stage 4: deploy daily_trips_weather (join NYC daily weather)
+	$(WITH) $(PY) -m citibike_pipeline.analytics daily-weather
+
+daily: ## Stage 4: daily_trips view + m_daily_trips snapshot + weather-join view
+	$(WITH) $(PY) -m citibike_pipeline.analytics daily
