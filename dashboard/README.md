@@ -17,8 +17,9 @@ so the app pulls it once (cached for an hour) and filters in-browser.
 
 | Tab | Visualizations |
 |---|---|
-| **Overview** | Daily trips + 30-day average overlaid with temperature (dual axis); a ranked "which conditions hurt ridership most" bar |
+| **Overview** | Daily trips + 30-day average overlaid with temperature (dual axis) |
 | **Impact** | Regression-isolated effect of each weather factor (partial effects with 95% CIs) + a trend/season/weather variance decomposition |
+| **Performance** | Weather-adjusted ridership (operator KPI): actual vs. weather-removed trend, the period's weather impact %, and per-year weather favorability |
 | **Temperature** | Trips vs. avg temperature (lowess fit, by season) + temperature-band averages |
 | **Rain & Snow** | Trips by condition (box), vs. snowfall, vs. precipitation, and vs. snow lying on the ground |
 | **Wind** | Ridership index vs. wind speed (by season) + wind-band averages |
@@ -41,6 +42,13 @@ log-ridership on month fixed effects, day-of-week, holidays and all weather toge
 (Newey–West SEs) reports each factor's *partial* effect with the others held constant.
 It separates wind from the cold it rides with, and flips thunderstorms from
 apparently-negative to positive once their rain is accounted for.
+
+The **Performance** tab reuses that modeling for an operator KPI: it predicts the trips
+expected for each day's weather *and* time of year, then contrasts the actual weather
+against the day-of-year climatological normal to produce a **weather-adjusted** ridership
+— so true year-over-year growth and weather-adjusted targets can be read net of whether
+the season ran warm/dry or cool/wet (validated: 2018, NYC's wettest year on record,
+prints ≈ −5%; warm 2024 ≈ +5%).
 
 ## Run locally
 

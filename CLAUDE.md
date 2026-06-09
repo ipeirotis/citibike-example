@@ -231,8 +231,12 @@ a day's trips as a percent of the surrounding ~month's norm — so a weather eff
 growth and seasonality. The index is still *marginal* (a windy day is also a cold day), so the
 **Impact** tab adds true attribution via `dashboard/attribution.py`: a regression of
 log-ridership on month fixed effects + day-of-week + holidays + all weather (Newey–West SEs)
-reporting each factor's *partial* effect. The `daily_trips_weather` view selects
-`d.* EXCEPT(date)`, so new weather columns flow through to the dashboard automatically. It is built to run on **Google
+reporting each factor's *partial* effect. The **Performance** tab reuses that module
+(`weather_adjusted_daily`) for an operator KPI — predicting each day's expected trips and
+contrasting actual weather against the day-of-year climatological normal to give a
+*weather-adjusted* ridership (true YoY growth net of the season's luck). The
+`daily_trips_weather` view selects `d.* EXCEPT(date)`, so new weather columns flow through
+to the dashboard automatically. It is built to run on **Google
 Cloud Run**: `bash dashboard/deploy.sh` enables the needed APIs and deploys from source. The
 pipeline's `claude-agent` SA now also holds the deployer capabilities (Cloud Run, Cloud Build,
 Service Usage, and `actAs` on the runtime SA), so it can run the deploy itself — the live

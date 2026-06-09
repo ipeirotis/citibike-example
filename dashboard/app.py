@@ -76,6 +76,12 @@ def weather_impacts(trips_col: str):
     return attribution.fit_impacts(df, trips_col)
 
 
+@st.cache_data(ttl=3600, show_spinner="Fitting weather-adjustment model…")
+def weather_adjusted(trips_col: str):
+    """Per-day actual / expected / weather-adjusted trips for a region (cached)."""
+    return attribution.weather_adjusted_daily(df, trips_col)
+
+
 # --------------------------------------------------------------------------- sidebar
 st.sidebar.title("🚲 Citibike × Weather")
 st.sidebar.caption("NYC daily ridership vs. daily weather, 2013 → present.")
@@ -170,10 +176,10 @@ if len(dw):
     k[3].metric("Warm vs. cold day", f"{ratio:,.1f}×" if np.isfinite(ratio) else "—",
                 help="Avg trips on warm days (≥65°F) ÷ cold days (<40°F).")
 
-(tab_overview, tab_impact, tab_temp, tab_precip, tab_wind, tab_humid,
+(tab_overview, tab_impact, tab_perf, tab_temp, tab_precip, tab_wind, tab_humid,
  tab_riders, tab_seasonal) = st.tabs(
-    ["📈 Overview", "🎯 Impact", "🌡️ Temperature", "🌧️ Rain & Snow", "🌬️ Wind",
-     "💧 Humidity", "🧍 Riders", "🗓️ Seasonality"]
+    ["📈 Overview", "🎯 Impact", "📊 Performance", "🌡️ Temperature", "🌧️ Rain & Snow",
+     "🌬️ Wind", "💧 Humidity", "🧍 Riders", "🗓️ Seasonality"]
 )
 
 # --------------------------------------------------------------------------- overview
@@ -202,52 +208,6 @@ with tab_overview:
         "the seasons — peaks in summer, troughs in winter — tracking the temperature "
         "curve on the right axis."
     )
-
-    st.markdown("##### Which weather conditions hurt ridership most")
-    di = d.dropna(subset=["ridership_index"])
-    conds = [
-        ("Snowfall",            di["is_snowy"] == 1),
-        ("Heavy rain (≥½ in)",  di["prcp_inches"] >= 0.5),
-        ("High wind (≥10 mph)", di["wind_avg_mph"] >= 10),
-        ("Snow on ground",      di["snow_depth_inches"] > 0),
-        ("Any rain",            di["is_rainy"] == 1),
-        ("Thunderstorm",        di["is_thunder"] == 1),
-        ("Fog",                 di["is_foggy"] == 1),
-        ("Freezing (<32°F)",    di["is_freezing"] == 1),
-        ("Humid (RH ≥70%)",     di["is_humid"] == 1),
-        ("Haze / smoke",        di["is_hazy"] == 1),
-        ("Hot (>90°F)",         di["is_hot_day"] == 1),
-    ]
-    rows = []
-    for label, mask_c in conds:
-        sub = di.loc[mask_c, "ridership_index"].dropna()
-        if len(sub) >= 20:  # enough days for a stable median
-            rows.append({"Condition": label, "delta": sub.median() - 100, "days": int(len(sub))})
-    if rows:
-        imp = pd.DataFrame(rows).sort_values("delta")
-        fig = go.Figure(go.Bar(
-            x=imp["delta"], y=imp["Condition"], orientation="h",
-            marker_color=np.where(imp["delta"] < 0, NEG_COLOR, POS_COLOR),
-            customdata=imp["days"],
-            hovertemplate="%{y}: %{x:+.0f}% vs. normal<br>%{customdata} days<extra></extra>",
-            text=[f"{v:+.0f}%" for v in imp["delta"]], textposition="outside",
-            cliponaxis=False,
-        ))
-        fig.update_layout(
-            height=420, margin=dict(t=10, b=0, l=0, r=10),
-            xaxis_title="Median ridership vs. the surrounding month (%)", yaxis_title="",
-        )
-        st.plotly_chart(fig, width="stretch")
-        st.caption(
-            "Each bar is how a day's ridership typically compares to the surrounding "
-            "~month when that condition is present, so the network's growth and the "
-            "seasonal cycle are already netted out (a day at 100% rode exactly its "
-            "monthly norm). Snow and heavy rain hit hardest — roughly a third fewer "
-            "rides — followed by strong winds and snow lingering on the ground. Hot "
-            "days barely register: New Yorkers tolerate heat far better than cold, wet, "
-            "or wind. These are raw comparisons that still mix correlated weather (windy "
-            "days are also cold) — the **🎯 Impact** tab isolates each factor on its own."
-        )
 
 # --------------------------------------------------------------------------- impact
 with tab_impact:
@@ -294,6 +254,83 @@ with tab_impact:
             "conversely, come out *stronger* once isolated — a multi-day storm drags down its "
             "own monthly baseline, so the simple comparison understates it."
         )
+
+# --------------------------------------------------------------------------- performance
+with tab_perf:
+    st.subheader("Weather-adjusted ridership — performance net of the weather")
+    st.markdown(
+        "Raw ridership mixes real demand with the luck of the weather. This view models the "
+        "trips you'd **expect for each day's weather and the time of year**, then strips the "
+        "weather out — so growth and period-to-period comparisons are apples-to-apples. "
+        "*(Uses all days; the weekday/weekend filter doesn't apply here.)*"
+    )
+    try:
+        adj = weather_adjusted(TRIPS_COL)
+    except Exception as exc:  # a thin slice / singular design shouldn't crash the app
+        st.warning(f"Could not fit the weather-adjustment model ({exc}).")
+        adj = None
+    if adj is not None:
+        perf = adj.merge(df[["date", "year"]], on="date", how="inner")
+        perf = perf[(perf["year"] >= yr_lo) & (perf["year"] <= yr_hi) & (perf["date"] >= launch)]
+        if perf.empty:
+            st.info("No weather-covered days in this selection.")
+        else:
+            act, adjt = perf["actual"].sum(), perf["adjusted"].sum()
+            wpct = (act / adjt - 1) * 100
+            kc = st.columns(3)
+            kc[0].metric("Actual trips", f"{act/1e6:,.1f} M")
+            kc[1].metric("Weather-adjusted", f"{adjt/1e6:,.1f} M",
+                         help="Trips you'd expect for these dates under normal (seasonal-average) weather.")
+            kc[2].metric("Weather impact", f"{wpct:+.1f}%",
+                         help="How much the period's weather lifted (+) or dragged (−) ridership vs. the seasonal norm.")
+
+            roll = perf.set_index("date").sort_index()
+            roll["actual_28"] = roll["actual"].rolling("28D", min_periods=7).mean()
+            roll["adjusted_28"] = roll["adjusted"].rolling("28D", min_periods=7).mean()
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=roll.index, y=roll["actual_28"], name="Actual",
+                                     line=dict(color="#9ECAE1", width=1.5)))
+            fig.add_trace(go.Scatter(x=roll.index, y=roll["adjusted_28"], name="Weather-adjusted",
+                                     line=dict(color="#1F4E96", width=2.5)))
+            fig.update_layout(height=380, hovermode="x unified", yaxis_title="Trips / day (28-day avg)",
+                              legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "The dark line is ridership with the weather removed (what you'd see under normal "
+                "weather). Where actual dips below it, weather was holding rides back; above, "
+                "weather was a tailwind."
+            )
+
+            # near-complete years only, so annual totals are comparable
+            yr = (perf.assign(n=1).groupby("year")
+                      .agg(actual=("actual", "sum"), adjusted=("adjusted", "sum"), n=("n", "sum")))
+            yr = yr[yr["n"] >= 300]
+            yr["weather_pct"] = (yr["actual"] / yr["adjusted"] - 1) * 100
+            if len(yr) >= 2:
+                prev, last = yr.iloc[-2], yr.iloc[-1]
+                raw_g = (last["actual"] / prev["actual"] - 1) * 100
+                adj_g = (last["adjusted"] / prev["adjusted"] - 1) * 100
+                tail = (f" — {adj_g - raw_g:+.1f} pts of that swing was weather, not demand."
+                        if abs(adj_g - raw_g) >= 0.5 else ".")
+                st.markdown(
+                    f"**Underlying growth {int(yr.index[-2])} → {int(yr.index[-1])}:** ridership moved "
+                    f"**{raw_g:+.1f}%** on paper, but **{adj_g:+.1f}%** once the weather is removed{tail}"
+                )
+            if len(yr) >= 1:
+                fav = yr.reset_index()
+                fav["sign"] = np.where(fav["weather_pct"] >= 0, "favorable", "unfavorable")
+                fig = px.bar(fav, x="year", y="weather_pct", text_auto=".1f", color="sign",
+                             color_discrete_map={"favorable": POS_COLOR, "unfavorable": NEG_COLOR},
+                             labels={"weather_pct": "Weather impact on the year (%)", "year": "", "sign": ""})
+                fig.update_layout(height=300, showlegend=False, margin=dict(t=10, b=0, l=0, r=0))
+                st.plotly_chart(fig, width="stretch")
+                st.caption(
+                    "Each year's weather luck for riding: positive = warmer/drier than the seasonal "
+                    "norm, negative = cooler/wetter. The cool, wet stretch of 2018–19 cost a few "
+                    "percent; 2023–24 ran favorable — handy for weather-adjusting targets and reading "
+                    "true year-over-year growth."
+                )
 
 # --------------------------------------------------------------------------- temperature
 with tab_temp:
@@ -536,6 +573,12 @@ and all weather together, with Newey–West standard errors for the day-to-day
 autocorrelation. Each coefficient is a *partial* effect — the impact of that factor
 with the others held constant — which is what separates wind from the cold it rides
 with, and turns thunderstorms from apparently-negative to positive.
+
+The **📊 Performance tab** turns the same modeling into an operator KPI. It predicts the
+trips you'd expect for each day's weather *and* time of year, then contrasts the actual
+weather against the day-of-year climatological normal to compute a **weather-adjusted**
+ridership — letting you read true year-over-year growth and weather-adjust targets net
+of whether the season ran warm/dry or cool/wet.
 
 Day keys use Citibike's local (America/New_York) calendar date, and January 2021
 is de-duplicated (Citibike published it in both the legacy and current layouts).

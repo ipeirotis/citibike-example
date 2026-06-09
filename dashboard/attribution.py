@@ -156,6 +156,78 @@ def fit_humidity_impact(df: pd.DataFrame, trips_col: str) -> dict | None:
     }
 
 
+# --------------------------------------------------------------------------- KPI
+# Weather-adjusted ridership: model the trips you'd expect for each day's weather
+# *and* the time of year, then strip the weather out so growth and period-to-period
+# comparisons are apples-to-apples. Unlike fit_impacts (which uses month fixed
+# effects to isolate within-month weather elasticities), this predicts the seasonal
+# level *from weather*, then contrasts each day's actual weather against the
+# day-of-year climatological normal to get "how much did the weather help or hurt".
+_KPI_WX = ["tavg_f", "wind_avg_mph", "prcp_cap", "rain01", "snow_cap",
+           "snow_depth_inches", "is_thunder", "is_foggy"]
+_KPI_FORMULA = ("logy ~ C(ym) + C(dow) + holiday + bs(tavg_f, df=5) + wind_avg_mph"
+                " + prcp_cap + rain01 + snow_cap + snow_depth_inches + is_thunder + is_foggy")
+
+
+def _prep_kpi(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
+    d = df.copy()
+    d["y"] = pd.to_numeric(d[trips_col], errors="coerce")
+    d = d[d["y"] > 0].sort_values("date").reset_index(drop=True)
+    d["logy"] = np.log(d["y"])
+    d["ym"] = d["date"].dt.year * 12 + d["date"].dt.month
+    d["dow"] = d["date"].dt.dayofweek
+    d["doy"] = d["date"].dt.dayofyear
+    hol = USFederalHolidayCalendar().holidays(d["date"].min(), d["date"].max())
+    d["holiday"] = d["date"].isin(hol).astype(int)
+    for c in ["prcp_inches", "snow_inches", "snow_depth_inches", "is_thunder", "is_foggy"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+    # Cap precip/snow: past ~1.25in rain / 6in snow the system is already at its
+    # weather floor, and uncapped values make the log model over-predict shutdowns.
+    d["prcp_cap"] = d["prcp_inches"].clip(0, 1.25)
+    d["rain01"] = (d["prcp_inches"] > 0).astype(float)
+    d["snow_cap"] = d["snow_inches"].clip(0, 6.0)
+    return d
+
+
+def _doy_climatology(d: pd.DataFrame, cols: list[str]) -> dict[str, pd.Series]:
+    """Smoothed day-of-year normal for each weather column (circular 15-day mean)."""
+    clim = {}
+    for v in cols:
+        m = d.groupby("doy")[v].mean().reindex(range(1, 367)).interpolate(limit_direction="both")
+        sm = pd.concat([m, m, m]).rolling(15, center=True, min_periods=1).mean().iloc[366:732]
+        sm.index = range(1, 367)
+        clim[v] = sm
+    return clim
+
+
+def weather_adjusted_daily(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
+    """One row per day: actual, model-expected, weather_effect, and weather-adjusted trips.
+
+    * ``expected``        — trips the model predicts for the day (calendar + actual weather).
+    * ``weather_effect``  — fractional lift/drag of the day's weather vs the day-of-year
+                            climatological normal (``+0.05`` = weather added 5%).
+    * ``adjusted``        — ``actual / (1 + weather_effect)``: trips under normal weather.
+    """
+    d = _prep_kpi(df, trips_col)
+    clim = _doy_climatology(d, _KPI_WX)
+    for v in ["tavg_f", "wind_avg_mph"]:        # impute gaps so every day predicts
+        d[v] = d[v].fillna(d["doy"].map(clim[v]))
+    res = smf.ols(_KPI_FORMULA, data=d).fit()
+    pred_actual = res.predict(d)
+    normal = d.copy()
+    for v in _KPI_WX:
+        normal[v] = normal["doy"].map(clim[v])
+    pred_normal = res.predict(normal)
+    out = pd.DataFrame({
+        "date": d["date"].values,
+        "actual": d["y"].values,
+        "expected": np.exp(pred_actual).values,
+        "weather_effect": (np.exp(pred_actual - pred_normal) - 1).values,
+    })
+    out["adjusted"] = out["actual"] / (1 + out["weather_effect"])
+    return out
+
+
 if __name__ == "__main__":  # quick self-check against a CSV dump of daily_trips_weather
     import sys
 
@@ -167,3 +239,11 @@ if __name__ == "__main__":  # quick self-check against a CSV dump of daily_trips
           f"weather within-month partial-R2={meta['weather_partial_r2']:.3f}\n")
     with pd.option_context("display.max_rows", None, "display.width", 100):
         print(eff.assign(pct=eff.pct.round(1), lo=eff.lo.round(1), hi=eff.hi.round(1)))
+
+    adj = weather_adjusted_daily(frame, col)
+    adj["year"] = adj["date"].dt.year
+    yr = adj.groupby("year").agg(actual=("actual", "sum"), adjusted=("adjusted", "sum"))
+    yr["weather_pct"] = (yr["actual"] / yr["adjusted"] - 1) * 100
+    print("\nweather-adjusted annual totals + weather favorability:")
+    print(yr.assign(actual=(yr.actual / 1e6).round(1), adjusted=(yr.adjusted / 1e6).round(1)).round(1))
+
