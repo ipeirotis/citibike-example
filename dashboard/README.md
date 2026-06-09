@@ -17,13 +17,22 @@ so the app pulls it once (cached for an hour) and filters in-browser.
 
 | Tab | Visualizations |
 |---|---|
-| **Overview** | Daily trips + 30-day average overlaid with temperature (dual axis) |
+| **Overview** | Daily trips + 30-day average overlaid with temperature (dual axis); a ranked "which conditions hurt ridership most" bar |
 | **Temperature** | Trips vs. avg temperature (lowess fit, by season) + temperature-band averages |
-| **Rain & Snow** | Trips by condition (box), trips vs. snowfall, trips vs. precipitation |
+| **Rain & Snow** | Trips by condition (box), vs. snowfall, vs. precipitation, and vs. snow lying on the ground |
+| **Wind** | Ridership index vs. wind speed (by season) + wind-band averages |
+| **Humidity** | Dew-point comfort on warm days — scatter + comfort-band averages (2016–2024) |
 | **Riders** | Casual share vs. temperature; member vs. casual by temperature band |
 | **Seasonality** | Month × year heatmap; average trips per day by month |
 
 Sidebar filters: year range, region (NYC + JC / NYC / JC), and weekdays vs. weekends.
+
+The Wind, Humidity and Overview-conditions views read a **ridership index** — a day's
+trips as a percent of the surrounding ~month's typical trips — so the effect of a
+variable that is itself seasonal (wind, humidity, storms) shows up net of the
+network's growth and the seasonal cycle. Humidity, dew point, wet-bulb and pressure
+are Central Park readings covering **2016–2024**; temperature, precipitation, snow
+(incl. depth), wind, and the condition flags span the full history.
 
 ## Run locally
 

@@ -49,14 +49,16 @@ WHERE NOT (source_era = 'current' AND DATE(start_time) < DATE '{cutover}')
 GROUP BY date"""
 
 # Daily ridership LEFT JOINed to NYC daily weather — the dashboard's source view.
+# `d.* EXCEPT(date)` carries every weather column through — calendar context
+# (year/month/day_of_week/is_weekend/season), temperature, precipitation & snow,
+# snow depth, wind, humidity/comfort (RH, dew point, wet-bulb), pressure, and the
+# 1/0 condition flags — so new weather measurements flow into the dashboard
+# automatically without editing this view. `t.date` is the join key + canonical date.
 _DAILY_WEATHER_SQL = """\
 CREATE OR REPLACE VIEW `{view}` AS
 SELECT
   t.*,
-  d.year, d.month, d.day_of_week, d.is_weekend, d.season,
-  d.tmin_f, d.tmax_f, d.tavg_f,
-  d.prcp_inches, d.snow_inches,
-  d.is_rainy, d.is_snowy, d.is_hot_day, d.is_freezing
+  d.* EXCEPT(date)
 FROM `{daily}` AS t
 LEFT JOIN `{weather}` AS d
   ON t.date = d.date"""

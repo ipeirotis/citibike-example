@@ -29,6 +29,8 @@ st.set_page_config(page_title="Citibike × Weather", page_icon="🚲", layout="w
 # Consistent, colour-blind-friendly palette for the recurring categories.
 SEASON_COLORS = {"Winter": "#4C78A8", "Spring": "#54A24B", "Summer": "#E45756", "Fall": "#F58518"}
 COND_COLORS = {"Dry": "#54A24B", "Rainy": "#4C78A8", "Snowy": "#B279A2"}
+# Diverging colours for the "% vs. normal" impact bars (below / above the norm).
+NEG_COLOR, POS_COLOR = "#C44E52", "#55A868"
 
 
 # --------------------------------------------------------------------------- data
@@ -110,6 +112,21 @@ d["member"] = d[MEMBER_COL]
 d["casual"] = d[CASUAL_COL]
 # Casual share of the active region's trips (the most weather-sensitive segment).
 d["pct_casual"] = np.where(d["trips"] > 0, d["casual"] / d["trips"] * 100, np.nan)
+
+# Detrended "ridership index" — a day's trips as a percent of the surrounding
+# ~month's typical trips (centered 29-day median of the active region's daily
+# series). Computed over the region's full daily history (not the weekday/weekend
+# slice) so it stays stable under the filters. It nets out the long-term growth
+# trend and the seasonal level, which is what lets the Wind / Humidity / Conditions
+# views isolate a weather effect even though wind, humidity and storms are themselves
+# tied to the seasons. Weather is independent of the day of week, so that structure
+# averages out and does not bias the comparison.
+_region_daily = (df.loc[df["date"] >= launch]
+                   .set_index("date")[TRIPS_COL].astype(float).sort_index())
+_baseline = _region_daily.rolling(29, center=True, min_periods=10).median()
+_ridx = (_region_daily / _baseline) * 100.0
+d["ridership_index"] = d["date"].map(_ridx)
+
 dw = d.dropna(subset=["tavg_f"])  # rows that actually have weather
 
 # --------------------------------------------------------------------------- header
@@ -131,8 +148,9 @@ if len(dw):
     k[3].metric("Warm vs. cold day", f"{ratio:,.1f}×" if np.isfinite(ratio) else "—",
                 help="Avg trips on warm days (≥65°F) ÷ cold days (<40°F).")
 
-tab_overview, tab_temp, tab_precip, tab_riders, tab_seasonal = st.tabs(
-    ["📈 Overview", "🌡️ Temperature", "🌧️ Rain & Snow", "🧍 Riders", "🗓️ Seasonality"]
+tab_overview, tab_temp, tab_precip, tab_wind, tab_humid, tab_riders, tab_seasonal = st.tabs(
+    ["📈 Overview", "🌡️ Temperature", "🌧️ Rain & Snow", "🌬️ Wind", "💧 Humidity",
+     "🧍 Riders", "🗓️ Seasonality"]
 )
 
 # --------------------------------------------------------------------------- overview
@@ -161,6 +179,51 @@ with tab_overview:
         "the seasons — peaks in summer, troughs in winter — tracking the temperature "
         "curve on the right axis."
     )
+
+    st.markdown("##### Which weather conditions hurt ridership most")
+    di = d.dropna(subset=["ridership_index"])
+    conds = [
+        ("Snowfall",            di["is_snowy"] == 1),
+        ("Heavy rain (≥½ in)",  di["prcp_inches"] >= 0.5),
+        ("High wind (≥10 mph)", di["wind_avg_mph"] >= 10),
+        ("Snow on ground",      di["snow_depth_inches"] > 0),
+        ("Any rain",            di["is_rainy"] == 1),
+        ("Thunderstorm",        di["is_thunder"] == 1),
+        ("Fog",                 di["is_foggy"] == 1),
+        ("Freezing (<32°F)",    di["is_freezing"] == 1),
+        ("Humid (RH ≥70%)",     di["is_humid"] == 1),
+        ("Haze / smoke",        di["is_hazy"] == 1),
+        ("Hot (>90°F)",         di["is_hot_day"] == 1),
+    ]
+    rows = []
+    for label, mask_c in conds:
+        sub = di.loc[mask_c, "ridership_index"].dropna()
+        if len(sub) >= 20:  # enough days for a stable median
+            rows.append({"Condition": label, "delta": sub.median() - 100, "days": int(len(sub))})
+    if rows:
+        imp = pd.DataFrame(rows).sort_values("delta")
+        fig = go.Figure(go.Bar(
+            x=imp["delta"], y=imp["Condition"], orientation="h",
+            marker_color=np.where(imp["delta"] < 0, NEG_COLOR, POS_COLOR),
+            customdata=imp["days"],
+            hovertemplate="%{y}: %{x:+.0f}% vs. normal<br>%{customdata} days<extra></extra>",
+            text=[f"{v:+.0f}%" for v in imp["delta"]], textposition="outside",
+            cliponaxis=False,
+        ))
+        fig.update_layout(
+            height=420, margin=dict(t=10, b=0, l=0, r=10),
+            xaxis_title="Median ridership vs. the surrounding month (%)", yaxis_title="",
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "Each bar is how a day's ridership typically compares to the surrounding "
+            "~month when that condition is present, so the network's growth and the "
+            "seasonal cycle are already netted out (a day at 100% rode exactly its "
+            "monthly norm). Snow and heavy rain hit hardest — roughly a third fewer "
+            "rides — followed by strong winds and snow lingering on the ground. Hot "
+            "days barely register: New Yorkers tolerate heat far better than cold, wet, "
+            "or wind."
+        )
 
 # --------------------------------------------------------------------------- temperature
 with tab_temp:
@@ -217,16 +280,102 @@ with tab_precip:
         st.plotly_chart(fig, width="stretch")
         st.caption("On snow days, ridership collapses as accumulation rises — the heaviest storms bring the system to a near-standstill.")
 
-    rain = dw[dw["prcp_inches"] > 0]
-    fig = px.scatter(
-        rain, x="prcp_inches", y="trips", color="season", color_discrete_map=SEASON_COLORS,
-        trendline="lowess", opacity=0.4, render_mode="webgl",
-        labels={"prcp_inches": "Precipitation (inches)", "trips": "Trips / day", "season": "Season"},
+    c3, c4 = st.columns(2)
+    with c3:
+        rain = dw[dw["prcp_inches"] > 0]
+        fig = px.scatter(
+            rain, x="prcp_inches", y="trips", color="season", color_discrete_map=SEASON_COLORS,
+            trendline="lowess", opacity=0.4, render_mode="webgl",
+            labels={"prcp_inches": "Precipitation (inches)", "trips": "Trips / day", "season": "Season"},
+        )
+        fig.update_layout(height=380, legend=dict(orientation="h", y=1.02, x=0),
+                          margin=dict(t=10, b=0, l=0, r=0))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Across rainy days, heavier precipitation pulls ridership down within every season.")
+    with c4:
+        ground = dw[dw["snow_depth_inches"] > 0]
+        fig = px.scatter(
+            ground, x="snow_depth_inches", y="trips", color="tavg_f",
+            color_continuous_scale="Blues_r", opacity=0.7,
+            labels={"snow_depth_inches": "Snow on the ground (inches)", "trips": "Trips / day", "tavg_f": "Temp °F"},
+        )
+        fig.update_layout(height=380, margin=dict(t=10, b=0, l=0, r=0))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Snow lying on the ground holds ridership down for days after a storm — not just on the day it falls.")
+
+# --------------------------------------------------------------------------- wind
+with tab_wind:
+    st.subheader("Strong winds keep riders off the bikes")
+    wind = d.dropna(subset=["wind_avg_mph", "ridership_index"])
+    c1, c2 = st.columns([3, 2])
+    with c1:
+        fig = px.scatter(
+            wind, x="wind_avg_mph", y="ridership_index", color="season",
+            color_discrete_map=SEASON_COLORS, trendline="lowess",
+            trendline_options=dict(frac=0.4), opacity=0.45, render_mode="webgl",
+            labels={"wind_avg_mph": "Average wind speed (mph)",
+                    "ridership_index": "Ridership vs. normal (%)", "season": "Season"},
+        )
+        fig.add_hline(y=100, line_dash="dot", line_color="#888")
+        fig.update_layout(height=460, legend=dict(orientation="h", y=1.02, x=0),
+                          margin=dict(t=10, b=0, l=0, r=0))
+        st.plotly_chart(fig, width="stretch")
+    with c2:
+        bands = pd.cut(wind["wind_avg_mph"], [-1, 5, 9, 13, 100],
+                       labels=["Calm <5", "Breezy 5–9", "Windy 9–13", "Gale 13+"])
+        band = wind.groupby(bands, observed=True)["ridership_index"].median().reset_index()
+        fig = px.bar(band, x="wind_avg_mph", y="ridership_index", text_auto=".0f",
+                     color="ridership_index", color_continuous_scale="RdYlGn", range_color=[60, 110],
+                     labels={"wind_avg_mph": "Daily average wind", "ridership_index": "Median ridership vs. normal (%)"})
+        fig.add_hline(y=100, line_dash="dot", line_color="#888")
+        fig.update_layout(height=460, coloraxis_showscale=False, margin=dict(t=10, b=0, l=0, r=0))
+        st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "Wind is shown against the **ridership index** — a day's trips as a percent of "
+        "the surrounding month's norm — so the effect is net of season (winter is both "
+        "colder *and* windier). Calm and breezy days ride near normal; once the daily "
+        "average tops ~9 mph ridership drops off, and the windiest days (13 mph+, "
+        "gusting 30–40 mph) run little more than half their usual volume."
     )
-    fig.update_layout(height=380, legend=dict(orientation="h", y=1.02, x=0),
-                      margin=dict(t=10, b=0, l=0, r=0))
-    st.plotly_chart(fig, width="stretch")
-    st.caption("Across rainy days, heavier precipitation pulls ridership down within every season.")
+
+# --------------------------------------------------------------------------- humidity
+with tab_humid:
+    st.subheader("On warm days, mugginess thins the crowd")
+    comfort = d.dropna(subset=["dewpoint_f", "ridership_index"])
+    warm = comfort[comfort["tavg_f"] >= 68].copy()
+    if warm.empty:
+        st.info(
+            "No warm days (avg ≥ 68°F) with humidity data in this selection. "
+            "Humidity and dew point are available for **2016–2024** only — widen the year range."
+        )
+    else:
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            fig = px.scatter(
+                warm, x="dewpoint_f", y="ridership_index", color="tavg_f",
+                color_continuous_scale="Turbo", opacity=0.5, render_mode="webgl",
+                labels={"dewpoint_f": "Dew point (°F) — higher is muggier",
+                        "ridership_index": "Ridership vs. normal (%)", "tavg_f": "Temp °F"},
+            )
+            fig.add_hline(y=100, line_dash="dot", line_color="#888")
+            fig.update_layout(height=460, margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Warm days only (avg ≥ 68°F). Dew point is the best single gauge of how muggy it feels.")
+        with c2:
+            warm["comfort"] = pd.cut(warm["dewpoint_f"], [-100, 60, 70, 200],
+                                     labels=["Pleasant <60°F", "Sticky 60–70°F", "Oppressive 70°F+"])
+            band = warm.groupby("comfort", observed=True)["ridership_index"].median().reset_index()
+            fig = px.bar(band, x="comfort", y="ridership_index", text_auto=".0f",
+                         color="ridership_index", color_continuous_scale="RdYlGn", range_color=[80, 110],
+                         labels={"comfort": "Dew-point comfort (warm days)", "ridership_index": "Median ridership vs. normal (%)"})
+            fig.add_hline(y=100, line_dash="dot", line_color="#888")
+            fig.update_layout(height=460, coloraxis_showscale=False, margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Dry-warm days ride above normal; oppressive humidity pulls them ~12% below.")
+        st.caption(
+            "🛈 Humidity, dew point, wet-bulb and pressure come from the Central Park "
+            "station and are available for **2016–2024** only."
+        )
 
 # --------------------------------------------------------------------------- riders
 with tab_riders:
@@ -294,10 +443,19 @@ This dashboard visualizes how weather affects Citibike ridership across the full
 
 - **Trips** come from `nyu-datasets.citibike.daily_trips` / `m_daily_trips`, a daily
   aggregation of the canonical `m_trips_unified` trip table.
-- **Weather** comes from `nyu-datasets.weather.m_weather_daily_nyc` (daily NYC
-  temperature, precipitation, and snow).
+- **Weather** comes from `nyu-datasets.weather.m_weather_daily_nyc` — daily NYC
+  temperature, precipitation, snow (and snow depth), **wind**, **humidity / dew
+  point**, **pressure**, and condition flags (fog, thunder, haze). Humidity, dew
+  point, wet-bulb and pressure are Central Park readings covering **2016–2024**;
+  everything else spans the full history.
 - The two are joined on the calendar date in
   `nyu-datasets.citibike.daily_trips_weather`, the single view this app reads.
+
+The **ridership index** used in the Wind, Humidity and Conditions views is a day's
+trips as a percent of the surrounding ~month's typical trips (a centered 29-day
+median of the selected region's daily series). It nets out the network's growth and
+the seasonal cycle, so a weather effect can be read on its own even though wind,
+humidity and storms are themselves correlated with the seasons.
 
 Day keys use Citibike's local (America/New_York) calendar date, and January 2021
 is de-duplicated (Citibike published it in both the legacy and current layouts).

@@ -32,7 +32,8 @@ built in Part 1 (the raw Citibike import); roll it up to one row per day (counts
 rider type, region, and bike type, plus durations and distances).
 
 The **weather is provided**: `nyu-datasets.weather.m_weather_daily_nyc` holds daily NYC
-temperature, rain, and snow. **Join your daily trips to it on the calendar date** —
+temperature, rain, and snow — plus snow depth, wind, humidity/dew point, pressure, and
+condition flags (fog, thunder, haze). **Join your daily trips to it on the calendar date** —
 assembling that combined daily table is part of the work. The dashboard then reads the
 day-level result, not the hundreds of millions of raw trips.
 
