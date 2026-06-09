@@ -179,12 +179,18 @@ def _prep_kpi(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     d["doy"] = d["date"].dt.dayofyear
     hol = USFederalHolidayCalendar().holidays(d["date"].min(), d["date"].max())
     d["holiday"] = d["date"].isin(hol).astype(int)
-    for c in ["prcp_inches", "snow_inches", "snow_depth_inches", "is_thunder", "is_foggy"]:
-        d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+    # Keep unreported weather as NaN — a NULL precip/snow is "not reported" (the
+    # ~2-week lag on the weather feed, or a station gap), NOT a measured dry day.
+    # weather_adjusted_daily() imputes these from day-of-year climatology, so an
+    # unreported day reads as seasonally neutral rather than as favorable dry
+    # weather. (clip and the `> 0` comparison both propagate NaN.)
+    for c in ["prcp_inches", "snow_inches", "snow_depth_inches", "is_thunder", "is_foggy",
+              "tavg_f", "wind_avg_mph"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
     # Cap precip/snow: past ~1.25in rain / 6in snow the system is already at its
     # weather floor, and uncapped values make the log model over-predict shutdowns.
     d["prcp_cap"] = d["prcp_inches"].clip(0, 1.25)
-    d["rain01"] = (d["prcp_inches"] > 0).astype(float)
+    d["rain01"] = np.where(d["prcp_inches"].isna(), np.nan, (d["prcp_inches"] > 0).astype(float))
     d["snow_cap"] = d["snow_inches"].clip(0, 6.0)
     return d
 
@@ -209,14 +215,19 @@ def weather_adjusted_daily(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     * ``adjusted``        — ``actual / (1 + weather_effect)``: trips under normal weather.
     """
     d = _prep_kpi(df, trips_col)
-    clim = _doy_climatology(d, _KPI_WX)
-    for v in ["tavg_f", "wind_avg_mph"]:        # impute gaps so every day predicts
+    clim = _doy_climatology(d, _KPI_WX)          # day-of-year normals (skip NaNs)
+    # Impute any *unreported* weather from climatology — seasonally neutral, never a
+    # fabricated dry day — so the ~2-week feed lag and station gaps don't masquerade
+    # as favorable weather. An imputed day sits at its seasonal norm, so its weather
+    # contribution cancels (weather_effect -> 0, adjusted == actual). Imputing here
+    # (vs. dropping) also keeps every month present for the month fixed effects.
+    for v in _KPI_WX:
         d[v] = d[v].fillna(d["doy"].map(clim[v]))
     res = smf.ols(_KPI_FORMULA, data=d).fit()
     pred_actual = res.predict(d)
     normal = d.copy()
     for v in _KPI_WX:
-        normal[v] = normal["doy"].map(clim[v])
+        normal[v] = d["doy"].map(clim[v])
     pred_normal = res.predict(normal)
     out = pd.DataFrame({
         "date": d["date"].values,
