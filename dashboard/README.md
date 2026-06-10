@@ -29,7 +29,7 @@ so the app pulls it once (cached for an hour) and filters in-browser.
 
 Sidebar filters: year range, region (NYC + JC / NYC / JC), and weekdays vs. weekends.
 
-The Wind, Humidity and Overview-conditions views read a **ridership index** — a day's
+The Wind and Humidity views read a **ridership index** — a day's
 trips as a percent of the surrounding ~month's typical trips — so the effect of a
 variable that is itself seasonal (wind, humidity, storms) shows up net of the
 network's growth and the seasonal cycle. Humidity, dew point, wet-bulb and pressure

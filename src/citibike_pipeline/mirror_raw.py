@@ -50,7 +50,8 @@ def list_archives(region: str = "all") -> list[tuple[str, int]]:
             size = int((find(c, "Size").text or "0"))
             archives.append((key, size))
 
-        truncated = (find(root, "IsTruncated").text or "false").lower() == "true"
+        trunc_el = find(root, "IsTruncated")  # absent counts as not-truncated
+        truncated = trunc_el is not None and (trunc_el.text or "false").lower() == "true"
         if not truncated or not last_key:
             break
         marker = last_key
