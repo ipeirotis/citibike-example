@@ -43,10 +43,23 @@ RAIN_LABELS = ["dry", "light", "moderate", "heavy"]  # "dry" is the reference
 _HAC = dict(cov_type="HAC", cov_kwds={"maxlags": 14})
 
 
+def _num(s: pd.Series) -> pd.Series:
+    """Coerce a column to numpy ``float64`` (non-numeric / nulls -> ``NaN``).
+
+    BigQuery's ``to_dataframe()`` returns integer columns as pandas *nullable*
+    ``Int64`` (e.g. ``is_thunder``, ``is_foggy``, the trip counts). The model math
+    here — climatology imputation, ``clip``, and statsmodels — assumes plain
+    ``float64``: pandas 3.0 refuses to ``fillna`` a nullable-integer column with a
+    fractional value ("cannot safely cast non-equivalent object to int64"), so leave
+    no nullable ints in the model frame. ``astype`` maps ``pd.NA`` to ``np.nan``.
+    """
+    return pd.to_numeric(s, errors="coerce").astype("float64")
+
+
 def _prep(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     """Daily frame -> model frame (log trips, calendar controls, weather bands)."""
     d = df.copy()
-    d["y"] = pd.to_numeric(d[trips_col], errors="coerce")
+    d["y"] = _num(d[trips_col])
     d = d[d["y"] > 0].dropna(subset=["tavg_f", "wind_avg_mph", "prcp_inches"]).copy()
     d["logy"] = np.log(d["y"])
     d["ym"] = d["date"].dt.year * 12 + d["date"].dt.month
@@ -59,7 +72,7 @@ def _prep(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     d["rain_band"] = (pd.cut(d["prcp_inches"].fillna(0), RAIN_EDGES, labels=RAIN_LABELS)
                         .cat.remove_unused_categories())
     for c in ["snow_inches", "snow_depth_inches", "is_thunder", "is_foggy"]:
-        d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+        d[c] = _num(d[c]).fillna(0.0)
     return d
 
 
@@ -130,7 +143,7 @@ def fit_humidity_impact(df: pd.DataFrame, trips_col: str) -> dict | None:
     Humidity is Central Park 2016–2024 only; returns None if too few rows.
     """
     d = df.copy()
-    d["y"] = pd.to_numeric(d[trips_col], errors="coerce")
+    d["y"] = _num(d[trips_col])
     d = d[(d["y"] > 0) & (d["tavg_f"] >= 68) & d["dewpoint_f"].notna()]
     d = d.dropna(subset=["wind_avg_mph"]).copy()
     if len(d) < 100:
@@ -171,7 +184,7 @@ _KPI_FORMULA = ("logy ~ C(ym) + C(dow) + holiday + bs(tavg_f, df=5) + wind_avg_m
 
 def _prep_kpi(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     d = df.copy()
-    d["y"] = pd.to_numeric(d[trips_col], errors="coerce")
+    d["y"] = _num(d[trips_col])
     d = d[d["y"] > 0].sort_values("date").reset_index(drop=True)
     d["logy"] = np.log(d["y"])
     d["ym"] = d["date"].dt.year * 12 + d["date"].dt.month
@@ -186,7 +199,7 @@ def _prep_kpi(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
     # weather. (clip and the `> 0` comparison both propagate NaN.)
     for c in ["prcp_inches", "snow_inches", "snow_depth_inches", "is_thunder", "is_foggy",
               "tavg_f", "wind_avg_mph"]:
-        d[c] = pd.to_numeric(d[c], errors="coerce")
+        d[c] = _num(d[c])
     # Cap precip/snow: past ~1.25in rain / 6in snow the system is already at its
     # weather floor, and uncapped values make the log model over-predict shutdowns.
     d["prcp_cap"] = d["prcp_inches"].clip(0, 1.25)
