@@ -2,8 +2,8 @@
 # Deploy the Citibike × Weather dashboard to Google Cloud Run (from source).
 #
 # Run this from a principal that can deploy to Cloud Run in `nyu-datasets`
-# (the pipeline's claude-agent service account cannot — see README.md for the
-# exact roles/APIs required). Override any value via the environment, e.g.:
+# (the pipeline's claude-agent service account holds these capabilities — see
+# README.md for the exact roles/APIs). Override any value via the environment, e.g.:
 #
 #   REGION=us-east1 SERVICE=citibike-weather bash deploy.sh
 #

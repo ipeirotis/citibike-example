@@ -56,10 +56,17 @@ def load_data() -> pd.DataFrame:
     # feed lags trips by a couple of weeks, leaving its year/is_weekend NULL there).
     df["year"] = df["date"].dt.year
     df["is_weekend"] = (df["date"].dt.dayofweek >= 5).astype(int)
-    # Categorical weather condition (snow takes precedence over rain).
-    df["condition"] = "Dry"
-    df.loc[df["is_rainy"] == 1, "condition"] = "Rainy"
-    df.loc[df["is_snowy"] == 1, "condition"] = "Snowy"
+    # Categorical weather condition (snow takes precedence over rain). A NULL
+    # is_rainy means precipitation was *not reported* — leave those days
+    # unlabeled rather than letting them masquerade as measured-dry days.
+    # BigQuery returns nullable Int64 columns, so build NA-safe plain-bool
+    # masks first (np.where chokes on masks containing pd.NA).
+    snowy = df["is_snowy"].eq(1).fillna(False).to_numpy(bool)
+    rainy = df["is_rainy"].eq(1).fillna(False).to_numpy(bool)
+    dry = df["is_rainy"].eq(0).fillna(False).to_numpy(bool)
+    df["condition"] = np.where(snowy, "Snowy",
+                      np.where(rainy, "Rainy",
+                      np.where(dry, "Dry", None)))
     return df
 
 
@@ -560,7 +567,7 @@ This dashboard visualizes how weather affects Citibike ridership across the full
 - The two are joined on the calendar date in
   `nyu-datasets.citibike.daily_trips_weather`, the single view this app reads.
 
-The **ridership index** used in the Wind, Humidity and Conditions views is a day's
+The **ridership index** used in the Wind and Humidity views is a day's
 trips as a percent of the surrounding ~month's typical trips (a centered 29-day
 median of the selected region's daily series). It nets out the network's growth and
 the seasonal cycle, so a weather effect can be read on its own even though wind,
