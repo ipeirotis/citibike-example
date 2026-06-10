@@ -59,10 +59,14 @@ def load_data() -> pd.DataFrame:
     # Categorical weather condition (snow takes precedence over rain). A NULL
     # is_rainy means precipitation was *not reported* — leave those days
     # unlabeled rather than letting them masquerade as measured-dry days.
-    df["condition"] = np.where(
-        df["is_snowy"] == 1, "Snowy",
-        np.where(df["is_rainy"] == 1, "Rainy",
-                 np.where(df["is_rainy"] == 0, "Dry", None)))
+    # BigQuery returns nullable Int64 columns, so build NA-safe plain-bool
+    # masks first (np.where chokes on masks containing pd.NA).
+    snowy = df["is_snowy"].eq(1).fillna(False).to_numpy(bool)
+    rainy = df["is_rainy"].eq(1).fillna(False).to_numpy(bool)
+    dry = df["is_rainy"].eq(0).fillna(False).to_numpy(bool)
+    df["condition"] = np.where(snowy, "Snowy",
+                      np.where(rainy, "Rainy",
+                      np.where(dry, "Dry", None)))
     return df
 
 
