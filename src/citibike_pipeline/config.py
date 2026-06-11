@@ -57,6 +57,10 @@ UNIFIED_TABLE = "m_trips_unified"
 DAILY_VIEW = "daily_trips"
 DAILY_TABLE = "m_daily_trips"
 DAILY_WEATHER_VIEW = "daily_trips_weather"
+# Hourly companions of the daily marts (same naming + materialization convention).
+HOURLY_VIEW = "hourly_trips"
+HOURLY_TABLE = "m_hourly_trips"
+HOURLY_WEATHER_VIEW = "hourly_trips_weather"
 
 # Daily NYC weather lives in a sibling dataset (same project + US location).
 WEATHER_DATASET = os.environ.get("CITIBIKE_WEATHER_DATASET", "weather")

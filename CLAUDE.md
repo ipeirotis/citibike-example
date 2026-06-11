@@ -204,14 +204,18 @@ duplication that all of 2013 and 2018 ship) so no month is double-counted.
 
 ## Daily marts & weather dashboard
 
-Stage 4 (`src/citibike_pipeline/analytics.py`, `make daily`) builds the analytics layer
-that powers a weather-effects dashboard. Three BigQuery objects in `nyu-datasets.citibike`:
+Stage 4 (`src/citibike_pipeline/analytics.py`, `make daily` / `make hourly`) builds the
+analytics layer that powers a weather-effects dashboard. Six BigQuery objects in
+`nyu-datasets.citibike` — a daily trio and its hourly companion:
 
 | Object | Type | What |
 |---|---|---|
 | `daily_trips` | view | One row per local calendar day over `trips_unified`: trip counts (total, member/casual both overall and per region, NYC/JC, classic/electric), and average/median duration + average distance. |
 | `m_daily_trips` | table | Native snapshot of `daily_trips` (~4.7k rows, 2013-06-01 → present). What the dashboard reads. |
-| `daily_trips_weather` | view | `m_daily_trips` LEFT JOIN `nyu-datasets.weather.m_weather_daily_nyc` on `date`. The dashboard's single source. |
+| `daily_trips_weather` | view | `m_daily_trips` LEFT JOIN `nyu-datasets.weather.m_weather_daily_nyc` on `date`. The dashboard's main source. |
+| `hourly_trips` | view | Same splits, one row per local clock hour (`TIMESTAMP_TRUNC(start_time, HOUR)` — naive local wall time, no tz conversion). Hours with zero trips have no row; consumers averaging by hour must zero-fill the (date × 24h) grid (the dashboard does). |
+| `m_hourly_trips` | table | Native snapshot of `hourly_trips` (~114k rows). Totals match `m_daily_trips` exactly. |
+| `hourly_trips_weather` | view | `m_hourly_trips` LEFT JOIN the Stage-W hourly weather, collapsed to one row per clock hour: FM-15 is the hour's canonical reading (specials only fill gaps, and are never averaged into precip — FM-15 precip is already the past-hour accumulation), gusts take the hour's max, falling-now flags OR across the hour's obs. Local-to-local join (`DATETIME(hour_ts) = DATETIME_TRUNC(obs_time_local, HOUR)`). |
 
 Two subtleties, both pinned in `sql/daily_trips.sql`:
 
@@ -228,7 +232,11 @@ Two subtleties, both pinned in `sql/daily_trips.sql`:
 
 The **dashboard** (`dashboard/`) is a Streamlit app that reads `daily_trips_weather` and
 visualizes ridership against the weather (2013 → present): temperature, rain, snow (incl.
-depth), wind, humidity/dew point, and condition flags (fog, thunder, haze). For the
+depth), wind, humidity/dew point, and condition flags (fog, thunder, haze). Its **Hourly**
+tab reads `hourly_trips_weather` for the within-day story: the weekday commute signature
+(member twin peaks at 8 am / 5–6 pm vs. the casual afternoon crest), rain matched to the
+hour it fell (≈40–50% haircut, shallowest during the morning commute), and an
+hour × temperature heatmap. For the
 season-correlated variables (wind, humidity, storms) it uses a detrended *ridership index* —
 a day's trips as a percent of the surrounding ~month's norm — so a weather effect reads net of
 growth and seasonality. The index is still *marginal* (a windy day is also a cold day), so the

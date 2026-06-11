@@ -6,7 +6,7 @@ PY   := .venv/bin/python
 WITH := bash scripts/with-credentials.sh
 export PYTHONPATH := src
 
-.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify daily-view daily-materialize daily-weather daily weather-hourly-mirror weather-hourly-extract weather-hourly-load weather-hourly
+.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify daily-view daily-materialize daily-weather daily hourly weather-hourly-mirror weather-hourly-extract weather-hourly-load weather-hourly
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -57,6 +57,9 @@ daily-weather: ## Stage 4: deploy daily_trips_weather (join NYC daily weather)
 
 daily: ## Stage 4: daily_trips view + m_daily_trips snapshot + weather-join view
 	$(WITH) $(PY) -m citibike_pipeline.analytics daily
+
+hourly: ## Stage 4: hourly_trips view + m_hourly_trips snapshot + weather-join view
+	$(WITH) $(PY) -m citibike_pipeline.analytics hourly
 
 weather-hourly-mirror:  ## Stage W: mirror NOAA LCD hourly CSVs -> gs://.../raw/lcd/
 	$(WITH) $(PY) -m citibike_pipeline.weather_hourly mirror
