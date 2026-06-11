@@ -242,7 +242,13 @@ a day's trips as a percent of the surrounding ~month's norm — so a weather eff
 growth and seasonality. The index is still *marginal* (a windy day is also a cold day), so the
 **Impact** tab adds true attribution via `dashboard/attribution.py`: a regression of
 log-ridership on month fixed effects + day-of-week + holidays + all weather (Newey–West SEs)
-reporting each factor's *partial* effect. The **Performance** tab reuses that module
+reporting each factor's *partial* effect. Its hourly block tightens the design one notch —
+**day fixed effects** (within-day demeaning) + hour×weekend controls + day-clustered SEs over
+`hourly_trips_weather` — and reports rain's event-time footprint (2 leads as
+falsification/anticipation, 4 lags + the cumulative effect), rain×daypart with a heavy-rain
+(≥0.10 in/h) shifter, and the member-vs-casual elasticity gradient as a validity probe.
+Hour-level effects deliberately include within-day displacement (the daily bars net it out),
+so the two grains together bracket true loss vs. shifting. The **Performance** tab reuses that module
 (`weather_adjusted_daily`) for an operator KPI — predicting each day's expected trips and
 contrasting actual weather against the day-of-year climatological normal to give a
 *weather-adjusted* ridership (true YoY growth net of the season's luck). The

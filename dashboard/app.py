@@ -114,6 +114,18 @@ def weather_adjusted(trips_col: str):
     return attribution.weather_adjusted_daily(df, trips_col)
 
 
+@st.cache_data(ttl=3600, show_spinner="Fitting hourly rain models…")
+def hourly_rain_profile(trips_col: str):
+    """Event-time rain footprint under day fixed effects (cached). attribution.py."""
+    return attribution.fit_hourly_rain_profile(load_hourly(), trips_col)
+
+
+@st.cache_data(ttl=3600, show_spinner="Fitting hourly rain models…")
+def hourly_rain_dayparts(trips_col: str):
+    """Rain-by-daypart partial effects under day fixed effects (cached)."""
+    return attribution.fit_hourly_rain_by_daypart(load_hourly(), trips_col)
+
+
 # --------------------------------------------------------------------------- sidebar
 st.sidebar.title("🚲 Citibike × Weather")
 st.sidebar.caption("NYC daily ridership vs. daily weather, 2013 → present.")
@@ -393,6 +405,94 @@ with tab_impact:
             "is accounted for, what's left are busy warm afternoons. Snow and heavy rain, "
             "conversely, come out *stronger* once isolated — a multi-day storm drags down its "
             "own monthly baseline, so the simple comparison understates it."
+        )
+
+    # ---- hourly attribution: day fixed effects over the hourly mart ----------
+    st.markdown("---")
+    st.subheader("Hourly attribution — rain at the hour it falls")
+    st.markdown(
+        "The hourly mart allows a *stricter* design than the month effects above: a fixed "
+        "effect for **every calendar day**, so growth, season, weekday, holidays and the "
+        "day's overall weather all cancel, and rain is identified purely from **within-day** "
+        "contrasts — a raining 8 am against the same day's dry 6 pm, net of the diurnal "
+        "pattern (hour × weekend controls; SEs clustered by day). Fit over the full "
+        f"{region.replace(' only', '')} history, independent of the filters."
+    )
+    try:
+        prof, pmeta = hourly_rain_profile(TRIPS_COL)
+        _, ameta = hourly_rain_dayparts(TRIPS_COL)
+        dp_m, _ = hourly_rain_dayparts(MEMBER_COL)
+        dp_c, _ = hourly_rain_dayparts(CASUAL_COL)
+    except Exception as exc:  # thin slices (e.g. early JC) shouldn't crash the app
+        st.warning(f"Could not fit the hourly rain models for this selection ({exc}).")
+        prof = None
+    if prof is not None:
+        c1, c2 = st.columns(2)
+        with c1:
+            prof = prof.copy()
+            prof["when"] = prof["k"].map({-2: "2h before", -1: "1h before", 0: "raining hour",
+                                          1: "+1h", 2: "+2h", 3: "+3h", 4: "+4h"})
+            prof["phase"] = np.where(prof["k"] < 0, "before the rain",
+                            np.where(prof["k"] == 0, "raining hour", "after the rain"))
+            prof["err_plus"] = prof["hi"] - prof["pct"]
+            prof["err_minus"] = prof["pct"] - prof["lo"]
+            fig = px.bar(prof, x="when", y="pct", color="phase",
+                         color_discrete_map={"before the rain": "#999999",
+                                             "raining hour": "#1F4E96",
+                                             "after the rain": "#74A9CF"},
+                         error_y="err_plus", error_y_minus="err_minus",
+                         category_orders={"when": prof["when"].tolist()},
+                         labels={"when": "", "pct": "Effect on that hour's trips (%)", "phase": ""})
+            fig.add_hline(y=0, line_color="#444")
+            fig.update_layout(height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                f"**An hour of rain leaves a footprint.** The raining hour itself loses "
+                f"{prof.loc[prof.k == 0, 'pct'].iloc[0]:,.0f}%, and the drag fades over the next "
+                f"~4 hours (wet streets, lingering showers) — summing the raining hour and the "
+                f"four after, {pmeta['cum_pct']:.0f}% [{pmeta['cum_lo']:.0f}, {pmeta['cum_hi']:.0f}] "
+                "in log terms, most of one average hour's ridership erased. The **leads are the "
+                "falsification check**: two hours ahead is just "
+                f"{prof.loc[prof.k == -2, 'pct'].iloc[0]:,.0f}% (no wet streets before it rains), "
+                f"and the {prof.loc[prof.k == -1, 'pct'].iloc[0]:,.0f}% one hour ahead reads as "
+                "anticipation — darkening skies, plus the gauge stamping rain to the :51 "
+                f"observation. ({pmeta['n']:,} hours over {pmeta['n_days']:,} days.)"
+            )
+        with c2:
+            dp = pd.concat([dp_m.assign(rider="Member"), dp_c.assign(rider="Casual")])
+            dp["err_plus"] = dp["hi"] - dp["pct"]
+            dp["err_minus"] = dp["pct"] - dp["lo"]
+            fig = px.bar(dp, x="daypart", y="pct", color="rider", barmode="group",
+                         color_discrete_map={"Member": "#4C78A8", "Casual": "#E45756"},
+                         error_y="err_plus", error_y_minus="err_minus",
+                         category_orders={"daypart": [b[2] for b in attribution.HOUR_BANDS]},
+                         labels={"daypart": "", "pct": "Effect of rain that hour (%)", "rider": ""})
+            fig.add_hline(y=0, line_color="#444")
+            fig.update_layout(height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "**The commute is the least elastic hour, and the gradient is the validity "
+                "check.** Rain in the AM rush costs the least — riders already committed to "
+                "getting to work — while midday and evening discretionary hours lose roughly "
+                "half. Casual riders are hit hardest exactly where riding is optional "
+                "(midday: "
+                f"{dp_c.loc[dp_c.daypart.str.startswith('midday'), 'pct'].iloc[0]:,.0f}% vs "
+                f"{dp_m.loc[dp_m.daypart.str.startswith('midday'), 'pct'].iloc[0]:,.0f}% for "
+                "members), with the gap nearly closing in the commute — the elasticity pattern "
+                "a real behavioral response should show, and hard to produce by leftover "
+                "seasonality, which would load on both segments alike. Heavy rain "
+                f"(≥{attribution.HEAVY_RAIN_IN:.2f} in/h) deepens whatever light rain "
+                f"leaves by another {ameta['heavy_extra']['pct']:,.0f}%."
+            )
+        st.info(
+            "**Reading the two grains together.** These hour-level losses are *bigger* than the "
+            "daily rain bars above because they include trips that simply moved to drier hours "
+            "of the same day (the day fixed effect nets that shifting out of the daily model "
+            "but keeps it in the hourly one). The daily bars give the net day effect; the "
+            "hourly bars give the at-the-moment effect — together they bracket how much of "
+            "rain's hit is true loss versus within-day displacement."
         )
 
 # --------------------------------------------------------------------------- performance
@@ -718,6 +818,15 @@ and all weather together, with Newey–West standard errors for the day-to-day
 autocorrelation. Each coefficient is a *partial* effect — the impact of that factor
 with the others held constant — which is what separates wind from the cold it rides
 with, and turns thunderstorms from apparently-negative to positive.
+
+Its **hourly block** pushes the same logic to the hourly mart with an even stricter
+design: a fixed effect for every *calendar day* (absorbed by within-day demeaning),
+hour-of-day × weekend controls, and day-clustered standard errors — so rain is
+identified purely from within-day contrasts. It reports rain's event-time footprint
+(leads as a falsification/anticipation check, lags for the wet-streets decay and the
+cumulative effect), rain by daypart with a heavy-rain shifter, and the member vs.
+casual elasticity gradient as a validity probe. Hour-level losses intentionally
+include within-day displacement; read them against the daily bars to bracket it.
 
 The **📊 Performance tab** turns the same modeling into an operator KPI. It predicts the
 trips you'd expect for each day's weather *and* time of year, then contrasts the actual
