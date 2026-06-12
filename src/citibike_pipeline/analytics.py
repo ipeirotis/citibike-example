@@ -118,6 +118,32 @@ FROM `{hourly}` AS t
 LEFT JOIN w
   ON DATETIME(t.hour_ts) = w.hour_dt"""
 
+# Monthly network-size series: distinct physical stations and trips per region.
+#
+# Reconciliation. We need a *continuous* count of physical stations across the 2021
+# schema change, and neither obvious key delivers one:
+#   * station ids churn across eras (legacy integers like 497 vs current strings like
+#     "5905.14"), so COUNT(DISTINCT start_station_id) jumps ~2,779 -> 1,750 -> 2,350
+#     across 2021-2023 with no real network change;
+#   * current-era coordinates are *per-trip bike GPS*, not a fixed station anchor, so
+#     ROUND(lat,lng) explodes to >12k phantom "stations" a year.
+# The station *name* (the intersection it sits on) is stable across eras, so we
+# reconcile on a normalized name (upper-cased, whitespace-collapsed). num_stations is
+# the count of distinct names that *originated* >=1 trip in the month ("active"); at the
+# monthly grain that is effectively the roster. Same era de-duplication as daily_trips.
+_STATION_COUNTS_SQL = """\
+CREATE OR REPLACE VIEW `{view}` AS
+SELECT
+  DATE_TRUNC(DATE(start_time), MONTH)                       AS month,
+  region,
+  COUNT(DISTINCT UPPER(TRIM(REGEXP_REPLACE(start_station_name, r'\\s+', ' '))))
+                                                            AS num_stations,
+  COUNT(*)                                                  AS num_trips
+FROM `{source}`
+WHERE NOT (source_era = 'current' AND DATE(start_time) < DATE '{cutover}')
+  AND start_station_name IS NOT NULL
+GROUP BY month, region"""
+
 # Daily ridership LEFT JOINed to NYC daily weather — the dashboard's source view.
 # `d.* EXCEPT(date)` carries every weather column through — calendar context
 # (year/month/day_of_week/is_weekend/season), temperature, precipitation & snow,
@@ -200,10 +226,31 @@ def build_hourly_weather_view(client: bigquery.Client) -> None:
     print(f"  deployed view {config.HOURLY_WEATHER_VIEW}")
 
 
+def build_station_counts_view(client: bigquery.Client) -> None:
+    """Deploy station_counts_monthly: monthly distinct stations + trips per region."""
+    sql = _STATION_COUNTS_SQL.format(
+        view=config.table_id(config.STATION_COUNTS_VIEW),
+        source=config.table_id(config.UNIFIED_VIEW),
+        cutover=config.CURRENT_ERA_START,
+    )
+    client.query(sql, location=config.LOCATION).result()
+    print(f"  deployed view {config.STATION_COUNTS_VIEW}")
+
+
+def materialize_station_counts(client: bigquery.Client) -> None:
+    """Snapshot station_counts_monthly into native m_station_counts_monthly."""
+    sql = (f"CREATE OR REPLACE TABLE `{config.table_id(config.STATION_COUNTS_TABLE)}` AS "
+           f"SELECT * FROM `{config.table_id(config.STATION_COUNTS_VIEW)}`")
+    client.query(sql, location=config.LOCATION).result()
+    out = client.get_table(config.table_id(config.STATION_COUNTS_TABLE))
+    print(f"  materialized {config.STATION_COUNTS_TABLE}: {out.num_rows:,} rows")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Build the daily/hourly marts for the weather dashboard.")
     ap.add_argument("command", choices=["daily-view", "daily-materialize", "daily-weather", "daily",
-                                        "hourly-view", "hourly-materialize", "hourly-weather", "hourly"])
+                                        "hourly-view", "hourly-materialize", "hourly-weather", "hourly",
+                                        "stations-view", "stations-materialize", "stations"])
     args = ap.parse_args(argv)
 
     client = _client()
@@ -219,6 +266,10 @@ def main(argv: list[str] | None = None) -> int:
         materialize_hourly(client)
     if args.command in ("hourly-weather", "hourly"):
         build_hourly_weather_view(client)
+    if args.command in ("stations-view", "stations"):
+        build_station_counts_view(client)
+    if args.command in ("stations-materialize", "stations"):
+        materialize_station_counts(client)
     return 0
 
 
