@@ -25,8 +25,11 @@ Reads two BigQuery views in `nyu-datasets` — `citibike.daily_trips_weather` an
 `citibike.hourly_trips_weather` — via Application Default Credentials.
 
 ```bash
-make install                 # repo venv (pandas, statsmodels, …)
-.venv/bin/pip install db-dtypes jupyter matplotlib   # notebook extras
+make install                 # repo venv (pandas, pyarrow, BigQuery client)
+# notebook extras: statsmodels powers the regressions (attribution.py + the lowess
+# fits) and is NOT in the root requirements.txt; db-dtypes lets BigQuery hydrate
+# DATE/NUMERIC columns into pandas.
+.venv/bin/pip install statsmodels db-dtypes jupyter matplotlib
 .venv/bin/jupyter lab notebooks/weather_effect_on_ridership.ipynb
 ```
 
