@@ -126,6 +126,29 @@ def hourly_rain_dayparts(trips_col: str):
     return attribution.fit_hourly_rain_by_daypart(load_hourly(), trips_col)
 
 
+STATION_SOURCE = os.environ.get("DASHBOARD_STATION_SOURCE",
+                                "nyu-datasets.citibike.m_station_counts_monthly")
+
+
+@st.cache_data(ttl=3600, show_spinner="Querying station counts…")
+def load_station_counts() -> pd.DataFrame:
+    """Monthly distinct physical stations + trips per region (network-size series).
+
+    Stations are reconciled on a normalized station name, the only key that stays
+    continuous across the 2021 schema change (ids churn; current-era coordinates are
+    per-trip bike GPS). Lets the Performance tab show ridership *per station*.
+    """
+    client = bigquery.Client(project=PROJECT)
+    sc = client.query(
+        f"SELECT month, region, num_stations, num_trips FROM `{STATION_SOURCE}` ORDER BY month"
+    ).to_dataframe()
+    sc["month"] = pd.to_datetime(sc["month"])
+    sc["year"] = sc["month"].dt.year
+    for column in ["num_stations", "num_trips"]:
+        sc[column] = pd.to_numeric(sc[column], errors="coerce").astype("float64")
+    return sc
+
+
 # --------------------------------------------------------------------------- sidebar
 st.sidebar.title("🚲 Citibike × Weather")
 st.sidebar.caption("NYC daily ridership vs. daily weather, 2013 → present.")
@@ -153,6 +176,12 @@ CASUAL_COL = {
     "NYC + Jersey City": "num_casual_trips",
     "NYC only": "num_casual_trips_nyc",
     "Jersey City only": "num_casual_trips_jc",
+}[region]
+# Which station-mart regions feed the active selection (NYC + JC are disjoint rosters).
+STATION_REGIONS = {
+    "NYC + Jersey City": ("NYC", "JC"),
+    "NYC only": ("NYC",),
+    "Jersey City only": ("JC",),
 }[region]
 
 show_weekends = st.sidebar.radio("Days", ["All days", "Weekdays only", "Weekends only"])
@@ -549,13 +578,32 @@ with tab_perf:
             yr["weather_pct"] = (yr["actual"] / yr["adjusted"] - 1) * 100
             if len(yr) >= 2:
                 prev, last = yr.iloc[-2], yr.iloc[-1]
+                prev_yr, last_yr = int(yr.index[-2]), int(yr.index[-1])
                 raw_g = (last["actual"] / prev["actual"] - 1) * 100
                 adj_g = (last["adjusted"] / prev["adjusted"] - 1) * 100
-                tail = (f" — {adj_g - raw_g:+.1f} pts of that swing was weather, not demand."
-                        if abs(adj_g - raw_g) >= 0.5 else ".")
+                # weather_pct is each year's weather luck (the bars below). The on-paper
+                # YoY mixes real demand with the *change* in that luck, so name which year
+                # the weather favored and say which way the headline is skewed.
+                prev_w, last_w = prev["weather_pct"], last["weather_pct"]
+                gap = adj_g - raw_g
+                if abs(gap) >= 0.5:
+                    if prev_w >= last_w:   # the earlier year got the bigger weather boost
+                        favored_yr, favored_w, other_yr, other_w = prev_yr, prev_w, last_yr, last_w
+                    else:
+                        favored_yr, favored_w, other_yr, other_w = last_yr, last_w, prev_yr, prev_w
+                    verb = "understating" if gap > 0 else "overstating"
+                    detail = (
+                        f" The weather bars below explain the gap: **{favored_yr}** got the bigger "
+                        f"lift from the weather (**{favored_w:+.1f}%** above its seasonal normal, vs "
+                        f"**{other_w:+.1f}%** for **{other_yr}**), so the on-paper figure compares the "
+                        f"two years against uneven weather — **{verb}** real demand growth by ~{abs(gap):.1f} pts."
+                    )
+                else:
+                    detail = (" Both years had similar weather, so the on-paper figure already "
+                              "reflects real demand.")
                 st.markdown(
-                    f"**Underlying growth {int(yr.index[-2])} → {int(yr.index[-1])}:** ridership moved "
-                    f"**{raw_g:+.1f}%** on paper, but **{adj_g:+.1f}%** once the weather is removed{tail}"
+                    f"**Underlying growth {prev_yr} → {last_yr}:** ridership moved **{raw_g:+.1f}%** "
+                    f"on paper, but **{adj_g:+.1f}%** after removing the weather.{detail}"
                 )
             if len(yr) >= 1:
                 fav = yr.reset_index()
@@ -571,6 +619,68 @@ with tab_perf:
                     "percent; 2023–24 ran favorable — handy for weather-adjusting targets and reading "
                     "true year-over-year growth."
                 )
+
+            # ---- network growth vs. usage intensity ----------------------------------
+            st.markdown("##### Is it more riders, or more stations?")
+            st.markdown(
+                "Raw trip growth bundles two very different things: **more usage** and **more "
+                "coverage** (the network roughly 7×'d its station count since 2014). Dividing "
+                "trips by the number of active stations separates them. Stations are reconciled "
+                "on a normalized **name** — the only key that stays continuous across the 2021 "
+                "schema change (ids churn across eras; current-era coordinates are per-trip bike GPS)."
+            )
+            try:
+                stations = load_station_counts()
+            except Exception as exc:  # mart not built (make stations) shouldn't break the tab
+                st.info(f"Station-count mart unavailable ({exc}). Run `make stations` "
+                        "(or `make daily`) to build `m_station_counts_monthly`.")
+                stations = None
+            if stations is not None:
+                stations = stations[stations["region"].isin(STATION_REGIONS)
+                                    & (stations["year"] >= yr_lo) & (stations["year"] <= yr_hi)]
+            if stations is not None and stations.empty:
+                st.info("No station data in this selection.")
+            elif stations is not None:
+                # Sum disjoint NYC/JC rosters per month, then roll months up to years.
+                per_month = stations.groupby("month").agg(
+                    stations=("num_stations", "sum"), trips=("num_trips", "sum")).reset_index()
+                per_month["year"] = per_month["month"].dt.year
+                net = per_month.groupby("year").agg(
+                    stations=("stations", "mean"),   # avg active stations that year
+                    trips=("trips", "sum"),
+                    months=("month", "size"))
+                net = net[net["months"] >= 10]       # near-complete years only
+                net["trips_per_station"] = net["trips"] / net["stations"]
+
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=net.index, y=net["stations"], name="Active stations",
+                    marker_color="#C7D9F0"))
+                fig.add_trace(go.Scatter(
+                    x=net.index, y=net["trips_per_station"], name="Trips per station",
+                    line=dict(color="#1F4E96", width=2.5), yaxis="y2"))
+                fig.update_layout(
+                    height=340, hovermode="x unified",
+                    yaxis=dict(title="Active stations"),
+                    yaxis2=dict(title="Trips / station / yr", overlaying="y", side="right",
+                                showgrid=False),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                    margin=dict(t=10, b=0, l=0, r=0))
+                st.plotly_chart(fig, width="stretch")
+
+                if len(net) >= 2:
+                    prev_n, last_n = net.iloc[-2], net.iloc[-1]
+                    n_prev, n_last = int(net.index[-2]), int(net.index[-1])
+                    trip_g = (last_n["trips"] / prev_n["trips"] - 1) * 100
+                    stn_g = (last_n["stations"] / prev_n["stations"] - 1) * 100
+                    tps_g = (last_n["trips_per_station"] / prev_n["trips_per_station"] - 1) * 100
+                    st.caption(
+                        f"**{n_prev} → {n_last}:** trips **{trip_g:+.1f}%** = network **{stn_g:+.1f}%** "
+                        f"(more stations) × intensity **{tps_g:+.1f}%** (trips per station). The "
+                        "per-station line is the demand signal net of coverage — when it climbs, "
+                        "existing stations are getting busier, not just multiplying. (Stations = the "
+                        "year's average active count; “active” = originated ≥1 trip that month.)"
+                    )
 
 # --------------------------------------------------------------------------- temperature
 with tab_temp:

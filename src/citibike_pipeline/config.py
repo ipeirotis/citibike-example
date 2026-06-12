@@ -61,6 +61,10 @@ DAILY_WEATHER_VIEW = "daily_trips_weather"
 HOURLY_VIEW = "hourly_trips"
 HOURLY_TABLE = "m_hourly_trips"
 HOURLY_WEATHER_VIEW = "hourly_trips_weather"
+# Monthly network-size series (distinct physical stations + trips, per region) used
+# to express ridership *per station* — separating usage growth from network coverage.
+STATION_COUNTS_VIEW = "station_counts_monthly"
+STATION_COUNTS_TABLE = "m_station_counts_monthly"
 
 # Daily NYC weather lives in a sibling dataset (same project + US location).
 WEATHER_DATASET = os.environ.get("CITIBIKE_WEATHER_DATASET", "weather")
