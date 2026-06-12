@@ -169,6 +169,7 @@ machine-readable spec lives in `schemas/canonical.json`.
 ├── sql/daily_trips_weather.sql   # daily trips ⨝ NYC weather (mirrors analytics.py)
 ├── sql/weather_hourly_nyc.sql    # hourly Central Park weather view (mirrors weather_hourly.py)
 ├── dashboard/             # Streamlit weather-effects dashboard (Cloud Run)
+├── notebooks/             # narrative analysis (weather × ridership, daily + hourly)
 └── schemas/canonical.json # machine-readable canonical schema
 ```
 
