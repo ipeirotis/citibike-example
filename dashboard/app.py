@@ -549,13 +549,32 @@ with tab_perf:
             yr["weather_pct"] = (yr["actual"] / yr["adjusted"] - 1) * 100
             if len(yr) >= 2:
                 prev, last = yr.iloc[-2], yr.iloc[-1]
+                prev_yr, last_yr = int(yr.index[-2]), int(yr.index[-1])
                 raw_g = (last["actual"] / prev["actual"] - 1) * 100
                 adj_g = (last["adjusted"] / prev["adjusted"] - 1) * 100
-                tail = (f" — {adj_g - raw_g:+.1f} pts of that swing was weather, not demand."
-                        if abs(adj_g - raw_g) >= 0.5 else ".")
+                # weather_pct is each year's weather luck (the bars below). The on-paper
+                # YoY mixes real demand with the *change* in that luck, so name which year
+                # the weather favored and say which way the headline is skewed.
+                prev_w, last_w = prev["weather_pct"], last["weather_pct"]
+                gap = adj_g - raw_g
+                if abs(gap) >= 0.5:
+                    if prev_w >= last_w:   # the earlier year got the bigger weather boost
+                        favored_yr, favored_w, other_yr, other_w = prev_yr, prev_w, last_yr, last_w
+                    else:
+                        favored_yr, favored_w, other_yr, other_w = last_yr, last_w, prev_yr, prev_w
+                    verb = "understating" if gap > 0 else "overstating"
+                    detail = (
+                        f" The weather bars below explain the gap: **{favored_yr}** got the bigger "
+                        f"lift from the weather (**{favored_w:+.1f}%** above its seasonal normal, vs "
+                        f"**{other_w:+.1f}%** for **{other_yr}**), so the on-paper figure compares the "
+                        f"two years against uneven weather — **{verb}** real demand growth by ~{abs(gap):.1f} pts."
+                    )
+                else:
+                    detail = (" Both years had similar weather, so the on-paper figure already "
+                              "reflects real demand.")
                 st.markdown(
-                    f"**Underlying growth {int(yr.index[-2])} → {int(yr.index[-1])}:** ridership moved "
-                    f"**{raw_g:+.1f}%** on paper, but **{adj_g:+.1f}%** once the weather is removed{tail}"
+                    f"**Underlying growth {prev_yr} → {last_yr}:** ridership moved **{raw_g:+.1f}%** "
+                    f"on paper, but **{adj_g:+.1f}%** after removing the weather.{detail}"
                 )
             if len(yr) >= 1:
                 fav = yr.reset_index()
