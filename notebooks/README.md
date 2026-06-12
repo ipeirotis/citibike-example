@@ -14,10 +14,13 @@ How NYC weather moves Citibike ridership, **2013 → present**, across two time 
   leads as a falsification check, a heavy-rain intensity shifter, day-clustered standard
   errors, and the member-vs-casual elasticity gradient as a validity probe.
 
-It reuses the exact estimators in [`../dashboard/attribution.py`](../dashboard/attribution.py)
-(`fit_impacts`, `fit_hourly_rain_profile`, `fit_hourly_rain_by_daypart`,
-`weather_adjusted_daily`), so the narrative and the live Streamlit dashboard report the
-same numbers.
+It builds every model **from scratch** with `statsmodels` — it does *not* import the
+dashboard code — so the regression design is visible and auditable on the page. The
+Streamlit dashboard packages the equivalent logic in
+[`../dashboard/attribution.py`](../dashboard/attribution.py) (`fit_impacts`,
+`fit_hourly_rain_profile`, `fit_hourly_rain_by_daypart`, `weather_adjusted_daily`); the two
+are kept in sync by hand, and the notebook's executed outputs match the live dashboard. (If
+you change an estimator in `attribution.py`, update the notebook's matching cell too.)
 
 ### Running it
 

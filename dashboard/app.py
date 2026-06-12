@@ -629,12 +629,18 @@ with tab_perf:
                 "on a normalized **name** — the only key that stays continuous across the 2021 "
                 "schema change (ids churn across eras; current-era coordinates are per-trip bike GPS)."
             )
-            stations = load_station_counts()
-            stations = stations[stations["region"].isin(STATION_REGIONS)
-                                 & (stations["year"] >= yr_lo) & (stations["year"] <= yr_hi)]
-            if stations.empty:
+            try:
+                stations = load_station_counts()
+            except Exception as exc:  # mart not built (make stations) shouldn't break the tab
+                st.info(f"Station-count mart unavailable ({exc}). Run `make stations` "
+                        "(or `make daily`) to build `m_station_counts_monthly`.")
+                stations = None
+            if stations is not None:
+                stations = stations[stations["region"].isin(STATION_REGIONS)
+                                    & (stations["year"] >= yr_lo) & (stations["year"] <= yr_hi)]
+            if stations is not None and stations.empty:
                 st.info("No station data in this selection.")
-            else:
+            elif stations is not None:
                 # Sum disjoint NYC/JC rosters per month, then roll months up to years.
                 per_month = stations.groupby("month").agg(
                     stations=("num_stations", "sum"), trips=("num_trips", "sum")).reset_index()

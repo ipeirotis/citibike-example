@@ -266,9 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         materialize_hourly(client)
     if args.command in ("hourly-weather", "hourly"):
         build_hourly_weather_view(client)
-    if args.command in ("stations-view", "stations"):
+    if args.command in ("stations-view", "stations", "daily"):
         build_station_counts_view(client)
-    if args.command in ("stations-materialize", "stations"):
+    if args.command in ("stations-materialize", "stations", "daily"):
         materialize_station_counts(client)
     return 0
 

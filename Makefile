@@ -55,7 +55,7 @@ daily-materialize: ## Stage 4: snapshot daily_trips into native m_daily_trips
 daily-weather: ## Stage 4: deploy daily_trips_weather (join NYC daily weather)
 	$(WITH) $(PY) -m citibike_pipeline.analytics daily-weather
 
-daily: ## Stage 4: daily_trips view + m_daily_trips snapshot + weather-join view
+daily: ## Stage 4: daily_trips + m_daily_trips + weather-join view + station-count marts
 	$(WITH) $(PY) -m citibike_pipeline.analytics daily
 
 hourly: ## Stage 4: hourly_trips view + m_hourly_trips snapshot + weather-join view

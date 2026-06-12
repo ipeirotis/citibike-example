@@ -218,7 +218,7 @@ analytics layer that powers a weather-effects dashboard. Six BigQuery objects in
 | `hourly_trips` | view | Same splits, one row per local clock hour (`TIMESTAMP_TRUNC(start_time, HOUR)` — naive local wall time, no tz conversion). Hours with zero trips have no row; consumers averaging by hour must zero-fill the (date × 24h) grid (the dashboard does). |
 | `m_hourly_trips` | table | Native snapshot of `hourly_trips` (~114k rows). Totals match `m_daily_trips` exactly. |
 | `hourly_trips_weather` | view | `m_hourly_trips` LEFT JOIN the Stage-W hourly weather, collapsed to one row per clock hour: FM-15 is the hour's canonical reading (specials only fill gaps, and are never averaged into precip — FM-15 precip is already the past-hour accumulation), gusts take the hour's max, falling-now flags OR across the hour's obs. Local-to-local join (`DATETIME(hour_ts) = DATETIME_TRUNC(obs_time_local, HOUR)`). |
-| `station_counts_monthly` | view | One row per (month, region): distinct physical **stations** + trips, so ridership can be read *per station* (usage vs. coverage). Built by `make stations`; see **Network size** below. |
+| `station_counts_monthly` | view | One row per (month, region): distinct physical **stations** + trips, so ridership can be read *per station* (usage vs. coverage). Built by `make daily` (or `make stations`); see **Network size** below. |
 | `m_station_counts_monthly` | table | Native snapshot (~285 rows). The dashboard's Performance tab reads it. |
 
 Two subtleties, both pinned in `sql/daily_trips.sql`:
@@ -243,6 +243,8 @@ per-trip *bike GPS*, not a fixed anchor, so rounded lat/long explodes to >12k ph
 year. The station **name** (the intersection) is stable across eras, so we reconcile on a
 normalized name (`UPPER(TRIM(REGEXP_REPLACE(name,'\s+',' ')))`). Same era de-dup as `daily_trips`.
 The Performance tab and the notebook's §7 use this to split YoY growth into coverage × intensity.
+Built as part of `make daily` (and standalone via `make stations`), so the documented refresh
+covers it; the dashboard degrades gracefully (an info banner) if the mart is missing.
 
 The **dashboard** (`dashboard/`) is a Streamlit app that reads `daily_trips_weather` and
 visualizes ridership against the weather (2013 → present): temperature, rain, snow (incl.
