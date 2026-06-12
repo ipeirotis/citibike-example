@@ -6,7 +6,7 @@ PY   := .venv/bin/python
 WITH := bash scripts/with-credentials.sh
 export PYTHONPATH := src
 
-.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify daily-view daily-materialize daily-weather daily
+.PHONY: help install selftest mirror mirror-jc extract extract-jc extract-nyc-new external view materialize unify daily-view daily-materialize daily-weather daily hourly weather-hourly-mirror weather-hourly-extract weather-hourly-load weather-hourly
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -57,3 +57,18 @@ daily-weather: ## Stage 4: deploy daily_trips_weather (join NYC daily weather)
 
 daily: ## Stage 4: daily_trips view + m_daily_trips snapshot + weather-join view
 	$(WITH) $(PY) -m citibike_pipeline.analytics daily
+
+hourly: ## Stage 4: hourly_trips view + m_hourly_trips snapshot + weather-join view
+	$(WITH) $(PY) -m citibike_pipeline.analytics hourly
+
+weather-hourly-mirror:  ## Stage W: mirror NOAA LCD hourly CSVs -> gs://.../raw/lcd/
+	$(WITH) $(PY) -m citibike_pipeline.weather_hourly mirror
+
+weather-hourly-extract: ## Stage W: raw LCD CSVs -> typed Parquet in GCS
+	$(WITH) $(PY) -m citibike_pipeline.weather_hourly extract
+
+weather-hourly-load:    ## Stage W: external table + weather_hourly_nyc view + m_ snapshot
+	$(WITH) $(PY) -m citibike_pipeline.weather_hourly load
+
+weather-hourly: ## Stage W: full hourly-weather refresh (mirror + extract + load)
+	$(WITH) $(PY) -m citibike_pipeline.weather_hourly all

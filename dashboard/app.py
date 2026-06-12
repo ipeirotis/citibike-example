@@ -73,6 +73,31 @@ def load_data() -> pd.DataFrame:
 df = load_data()
 
 
+HOURLY_SOURCE = os.environ.get("DASHBOARD_HOURLY_SOURCE",
+                               "nyu-datasets.citibike.hourly_trips_weather")
+
+
+@st.cache_data(ttl=3600, show_spinner="Querying hourly data…")
+def load_hourly() -> pd.DataFrame:
+    """Pull the hourly trips-and-weather view (one row per local clock hour).
+
+    Only the columns the Hourly tab needs, to keep the pull lean (~114k rows).
+    Hours with zero trips have no row in the mart — the tab zero-fills the
+    (date x 24h) grid before averaging, so overnight averages stay honest.
+    """
+    client = bigquery.Client(project=PROJECT)
+    cols = ("date, hour, num_trips, num_member_trips, num_casual_trips,"
+            " num_member_trips_nyc, num_casual_trips_nyc, num_member_trips_jc,"
+            " num_casual_trips_jc, num_nyc_trips, num_jc_trips,"
+            " temp_f, prcp_inches, is_raining, is_snowing")
+    h = client.query(f"SELECT {cols} FROM `{HOURLY_SOURCE}`").to_dataframe()
+    h["date"] = pd.to_datetime(h["date"])
+    for c in h.columns.drop(["date"]):  # nullable Int64 -> plain floats for the math
+        h[c] = pd.to_numeric(h[c], errors="coerce").astype("float64")
+    h["hour"] = h["hour"].astype("int64")  # join/grid key, must match range(24)
+    return h
+
+
 @st.cache_data(ttl=3600, show_spinner="Fitting weather-impact model…")
 def weather_impacts(trips_col: str):
     """Partial weather effects for a region (cached). See attribution.py.
@@ -87,6 +112,18 @@ def weather_impacts(trips_col: str):
 def weather_adjusted(trips_col: str):
     """Per-day actual / expected / weather-adjusted trips for a region (cached)."""
     return attribution.weather_adjusted_daily(df, trips_col)
+
+
+@st.cache_data(ttl=3600, show_spinner="Fitting hourly rain models…")
+def hourly_rain_profile(trips_col: str):
+    """Event-time rain footprint under day fixed effects (cached). attribution.py."""
+    return attribution.fit_hourly_rain_profile(load_hourly(), trips_col)
+
+
+@st.cache_data(ttl=3600, show_spinner="Fitting hourly rain models…")
+def hourly_rain_dayparts(trips_col: str):
+    """Rain-by-daypart partial effects under day fixed effects (cached)."""
+    return attribution.fit_hourly_rain_by_daypart(load_hourly(), trips_col)
 
 
 # --------------------------------------------------------------------------- sidebar
@@ -122,9 +159,11 @@ show_weekends = st.sidebar.radio("Days", ["All days", "Weekdays only", "Weekends
 
 st.sidebar.markdown("---")
 st.sidebar.markdown(
-    "**Source:** `nyu-datasets.citibike.daily_trips_weather`\n\n"
+    "**Sources:** `nyu-datasets.citibike.daily_trips_weather`\n\n"
     "Daily trips (`m_daily_trips`) ⨝ NYC daily weather "
-    "(`weather.m_weather_daily_nyc`)."
+    "(`weather.m_weather_daily_nyc`); the 🕐 Hourly tab reads "
+    "`hourly_trips_weather` (`m_hourly_trips` ⨝ hourly Central Park "
+    "weather, `weather.m_weather_hourly_nyc`)."
 )
 
 # Apply filters → a working frame. `trips` is the active region's count.
@@ -183,10 +222,10 @@ if len(dw):
     k[3].metric("Warm vs. cold day", f"{ratio:,.1f}×" if np.isfinite(ratio) else "—",
                 help="Avg trips on warm days (≥65°F) ÷ cold days (<40°F).")
 
-(tab_overview, tab_impact, tab_perf, tab_temp, tab_precip, tab_wind, tab_humid,
- tab_riders, tab_seasonal) = st.tabs(
-    ["📈 Overview", "🎯 Impact", "📊 Performance", "🌡️ Temperature", "🌧️ Rain & Snow",
-     "🌬️ Wind", "💧 Humidity", "🧍 Riders", "🗓️ Seasonality"]
+(tab_overview, tab_hourly, tab_impact, tab_perf, tab_temp, tab_precip, tab_wind,
+ tab_humid, tab_riders, tab_seasonal) = st.tabs(
+    ["📈 Overview", "🕐 Hourly", "🎯 Impact", "📊 Performance", "🌡️ Temperature",
+     "🌧️ Rain & Snow", "🌬️ Wind", "💧 Humidity", "🧍 Riders", "🗓️ Seasonality"]
 )
 
 # --------------------------------------------------------------------------- overview
@@ -215,6 +254,112 @@ with tab_overview:
         "the seasons — peaks in summer, troughs in winter — tracking the temperature "
         "curve on the right axis."
     )
+
+# --------------------------------------------------------------------------- hourly
+with tab_hourly:
+    st.subheader("The day's rhythm — and what weather does to it, hour by hour")
+    st.markdown(
+        "One row per **local clock hour** (`hourly_trips_weather`), joined to the hourly "
+        "Central Park record so rain can be matched to the very hour it fell. "
+        "*(Weekdays and weekends are shown side by side; the Days filter doesn't apply here.)*"
+    )
+    hh = load_hourly()
+    hh = hh[(hh["date"].dt.year >= yr_lo) & (hh["date"].dt.year <= yr_hi)
+            & (hh["date"] >= launch)].copy()
+    if hh.empty:
+        st.info("No hourly data in this selection.")
+    else:
+        hh["trips"] = hh[TRIPS_COL]
+        hh["member"] = hh[MEMBER_COL]
+        hh["casual"] = hh[CASUAL_COL]
+        # Zero-fill the (date x 24h) grid: an hour with no trips has no row in
+        # the mart, and dropping those would overstate the overnight averages.
+        grid = pd.MultiIndex.from_product(
+            [pd.date_range(hh["date"].min(), hh["date"].max(), freq="D"), range(24)],
+            names=["date", "hour"])
+        counts = (hh.set_index(["date", "hour"])[["trips", "member", "casual"]]
+                    .reindex(grid, fill_value=0.0).reset_index())
+        counts["is_weekend"] = counts["date"].dt.dayofweek >= 5
+
+        c1, c2 = st.columns(2)
+        with c1:
+            prof = (counts.assign(day_type=np.where(counts["is_weekend"], "Weekend", "Weekday"))
+                          .groupby(["day_type", "hour"], as_index=False)["trips"].mean())
+            fig = px.line(prof, x="hour", y="trips", color="day_type", markers=True,
+                          color_discrete_map={"Weekday": "#1F4E96", "Weekend": "#E45756"},
+                          labels={"hour": "Hour of day", "trips": "Avg trips / hour", "day_type": ""})
+            fig.update_layout(height=400, legend=dict(orientation="h", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0), xaxis=dict(dtick=2))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "Weekdays carry the commute signature — twin peaks at 8 am and 5–6 pm — "
+                "while weekends build to a single mid-afternoon hump."
+            )
+        with c2:
+            mc = (counts[~counts["is_weekend"]].groupby("hour")[["member", "casual"]].mean()
+                        .reset_index().melt("hour", var_name="rider", value_name="trips"))
+            mc["rider"] = mc["rider"].map({"member": "Member", "casual": "Casual"})
+            fig = px.line(mc, x="hour", y="trips", color="rider", markers=True,
+                          color_discrete_map={"Member": "#4C78A8", "Casual": "#E45756"},
+                          labels={"hour": "Hour of day (weekdays)", "trips": "Avg trips / hour", "rider": ""})
+            fig.update_layout(height=400, legend=dict(orientation="h", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0), xaxis=dict(dtick=2))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "The twin peaks belong to members (commuters); casual riders build to a "
+                "single afternoon crest — two different products sharing one fleet."
+            )
+
+        st.markdown("##### Rain at the hour it falls")
+        rain = (counts.merge(hh[["date", "hour", "is_raining"]], on=["date", "hour"], how="left")
+                      .dropna(subset=["is_raining"]))
+        rain["month"] = rain["date"].dt.month
+        cell = (rain.groupby(["month", "is_weekend", "hour", "is_raining"])["trips"].mean()
+                    .unstack("is_raining").rename(columns={0.0: "dry", 1.0: "wet"}).dropna())
+        if {"dry", "wet"} <= set(cell.columns) and len(cell):
+            n_wet = (rain[rain["is_raining"] == 1.0]
+                     .groupby(["month", "is_weekend", "hour"]).size()
+                     .reindex(cell.index).fillna(0.0))
+            cell["pct"] = (cell["wet"] / cell["dry"] - 1) * 100
+            hr_eff = (cell["pct"].mul(n_wet).groupby(level="hour").sum()
+                      / n_wet.groupby(level="hour").sum()).reset_index(name="pct")
+            fig = px.bar(hr_eff, x="hour", y="pct", color="pct",
+                         color_continuous_scale="RdYlGn", range_color=[-60, 0], text_auto=".0f",
+                         labels={"hour": "Hour of day", "pct": "Trips when raining vs dry (%)"})
+            fig.update_layout(height=360, coloraxis_showscale=False,
+                              margin=dict(t=10, b=0, l=0, r=0), xaxis=dict(dtick=2))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "Each bar compares hours when rain was falling against dry hours of the **same "
+                "hour-of-day, month and day-type** — roughly a 40–50% haircut whenever it rains, "
+                "deepest in the evening and overnight leisure hours and shallowest in the morning "
+                "commute, where riders are already committed to getting to work. (Marginal "
+                "comparison; the 🎯 Impact tab isolates factors at the daily grain.)"
+            )
+        else:
+            st.info("Not enough rainy-hour coverage in this selection.")
+
+        st.markdown("##### Temperature and the shape of the day")
+        heat = (counts.merge(hh[["date", "hour", "temp_f"]], on=["date", "hour"], how="left")
+                      .dropna(subset=["temp_f"]))
+        if len(heat):
+            heat["band"] = pd.cut(heat["temp_f"], [-100, 32, 45, 55, 65, 75, 85, 200],
+                                  labels=["<32°F", "32–45", "45–55", "55–65", "65–75", "75–85", "85°F+"])
+            cellh = heat.groupby(["band", "hour"], observed=True)["trips"].mean()
+            hour_avg = heat.groupby("hour")["trips"].mean()
+            idx = (cellh / hour_avg * 100).unstack("hour")
+            fig = px.imshow(idx, aspect="auto", color_continuous_scale="RdYlGn",
+                            color_continuous_midpoint=100, zmin=0, zmax=200,
+                            labels=dict(x="Hour of day", y="Temperature that hour", color="vs hour's norm (%)"))
+            fig.update_layout(height=420, margin=dict(t=10, b=0, l=0, r=0), xaxis=dict(dtick=2))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "Each cell: ridership in that hour at that temperature, as a percent of the hour's "
+                "all-weather norm. Mild-to-warm hours (55–85°F) run above norm around the clock; "
+                "the hottest hours (85°F+) stay strong in the evening but flatten at midday — "
+                "the one part of the day where more heat stops helping. (Temperature bands ride "
+                "with the seasons, so this is a descriptive view — not the isolated effect.)"
+            )
 
 # --------------------------------------------------------------------------- impact
 with tab_impact:
@@ -260,6 +405,94 @@ with tab_impact:
             "is accounted for, what's left are busy warm afternoons. Snow and heavy rain, "
             "conversely, come out *stronger* once isolated — a multi-day storm drags down its "
             "own monthly baseline, so the simple comparison understates it."
+        )
+
+    # ---- hourly attribution: day fixed effects over the hourly mart ----------
+    st.markdown("---")
+    st.subheader("Hourly attribution — rain at the hour it falls")
+    st.markdown(
+        "The hourly mart allows a *stricter* design than the month effects above: a fixed "
+        "effect for **every calendar day**, so growth, season, weekday, holidays and the "
+        "day's overall weather all cancel, and rain is identified purely from **within-day** "
+        "contrasts — a raining 8 am against the same day's dry 6 pm, net of the diurnal "
+        "pattern (hour × weekend controls; SEs clustered by day). Fit over the full "
+        f"{region.replace(' only', '')} history, independent of the filters."
+    )
+    try:
+        prof, pmeta = hourly_rain_profile(TRIPS_COL)
+        _, ameta = hourly_rain_dayparts(TRIPS_COL)
+        dp_m, _ = hourly_rain_dayparts(MEMBER_COL)
+        dp_c, _ = hourly_rain_dayparts(CASUAL_COL)
+    except Exception as exc:  # thin slices (e.g. early JC) shouldn't crash the app
+        st.warning(f"Could not fit the hourly rain models for this selection ({exc}).")
+        prof = None
+    if prof is not None:
+        c1, c2 = st.columns(2)
+        with c1:
+            prof = prof.copy()
+            prof["when"] = prof["k"].map({-2: "2h before", -1: "1h before", 0: "raining hour",
+                                          1: "+1h", 2: "+2h", 3: "+3h", 4: "+4h"})
+            prof["phase"] = np.where(prof["k"] < 0, "before the rain",
+                            np.where(prof["k"] == 0, "raining hour", "after the rain"))
+            prof["err_plus"] = prof["hi"] - prof["pct"]
+            prof["err_minus"] = prof["pct"] - prof["lo"]
+            fig = px.bar(prof, x="when", y="pct", color="phase",
+                         color_discrete_map={"before the rain": "#999999",
+                                             "raining hour": "#1F4E96",
+                                             "after the rain": "#74A9CF"},
+                         error_y="err_plus", error_y_minus="err_minus",
+                         category_orders={"when": prof["when"].tolist()},
+                         labels={"when": "", "pct": "Effect on that hour's trips (%)", "phase": ""})
+            fig.add_hline(y=0, line_color="#444")
+            fig.update_layout(height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                f"**An hour of rain leaves a footprint.** The raining hour itself loses "
+                f"{prof.loc[prof.k == 0, 'pct'].iloc[0]:,.0f}%, and the drag fades over the next "
+                f"~4 hours (wet streets, lingering showers) — summing the raining hour and the "
+                f"four after, {pmeta['cum_pct']:.0f}% [{pmeta['cum_lo']:.0f}, {pmeta['cum_hi']:.0f}] "
+                "in log terms, most of one average hour's ridership erased. The **leads are the "
+                "falsification check**: two hours ahead is just "
+                f"{prof.loc[prof.k == -2, 'pct'].iloc[0]:,.0f}% (no wet streets before it rains), "
+                f"and the {prof.loc[prof.k == -1, 'pct'].iloc[0]:,.0f}% one hour ahead reads as "
+                "anticipation — darkening skies, plus the gauge stamping rain to the :51 "
+                f"observation. ({pmeta['n']:,} hours over {pmeta['n_days']:,} days.)"
+            )
+        with c2:
+            dp = pd.concat([dp_m.assign(rider="Member"), dp_c.assign(rider="Casual")])
+            dp["err_plus"] = dp["hi"] - dp["pct"]
+            dp["err_minus"] = dp["pct"] - dp["lo"]
+            fig = px.bar(dp, x="daypart", y="pct", color="rider", barmode="group",
+                         color_discrete_map={"Member": "#4C78A8", "Casual": "#E45756"},
+                         error_y="err_plus", error_y_minus="err_minus",
+                         category_orders={"daypart": [b[2] for b in attribution.HOUR_BANDS]},
+                         labels={"daypart": "", "pct": "Effect of rain that hour (%)", "rider": ""})
+            fig.add_hline(y=0, line_color="#444")
+            fig.update_layout(height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                              margin=dict(t=10, b=0, l=0, r=0))
+            st.plotly_chart(fig, width="stretch")
+            st.caption(
+                "**The commute is the least elastic hour, and the gradient is the validity "
+                "check.** Rain in the AM rush costs the least — riders already committed to "
+                "getting to work — while midday and evening discretionary hours lose roughly "
+                "half. Casual riders are hit hardest exactly where riding is optional "
+                "(midday: "
+                f"{dp_c.loc[dp_c.daypart.str.startswith('midday'), 'pct'].iloc[0]:,.0f}% vs "
+                f"{dp_m.loc[dp_m.daypart.str.startswith('midday'), 'pct'].iloc[0]:,.0f}% for "
+                "members), with the gap nearly closing in the commute — the elasticity pattern "
+                "a real behavioral response should show, and hard to produce by leftover "
+                "seasonality, which would load on both segments alike. Heavy rain "
+                f"(≥{attribution.HEAVY_RAIN_IN:.2f} in/h) deepens whatever light rain "
+                f"leaves by another {ameta['heavy_extra']['pct']:,.0f}%."
+            )
+        st.info(
+            "**Reading the two grains together.** These hour-level losses are *bigger* than the "
+            "daily rain bars above because they include trips that simply moved to drier hours "
+            "of the same day (the day fixed effect nets that shifting out of the daily model "
+            "but keeps it in the hourly one). The daily bars give the net day effect; the "
+            "hourly bars give the at-the-moment effect — together they bracket how much of "
+            "rain's hit is true loss versus within-day displacement."
         )
 
 # --------------------------------------------------------------------------- performance
@@ -565,7 +798,12 @@ This dashboard visualizes how weather affects Citibike ridership across the full
   point, wet-bulb and pressure are Central Park readings covering **2016–2024**;
   everything else spans the full history.
 - The two are joined on the calendar date in
-  `nyu-datasets.citibike.daily_trips_weather`, the single view this app reads.
+  `nyu-datasets.citibike.daily_trips_weather`, the view the daily tabs read.
+- The **🕐 Hourly tab** reads `nyu-datasets.citibike.hourly_trips_weather` —
+  `m_hourly_trips` (one row per local clock hour) joined to the *hourly* Central
+  Park record (`nyu-datasets.weather.m_weather_hourly_nyc`, NOAA LCD v2: ~24
+  METARs/day from the same station as the daily weather, 2013 → present). Both
+  sides carry local wall-clock hours, so rain is matched to the very hour it fell.
 
 The **ridership index** used in the Wind and Humidity views is a day's
 trips as a percent of the surrounding ~month's typical trips (a centered 29-day
@@ -580,6 +818,15 @@ and all weather together, with Newey–West standard errors for the day-to-day
 autocorrelation. Each coefficient is a *partial* effect — the impact of that factor
 with the others held constant — which is what separates wind from the cold it rides
 with, and turns thunderstorms from apparently-negative to positive.
+
+Its **hourly block** pushes the same logic to the hourly mart with an even stricter
+design: a fixed effect for every *calendar day* (absorbed by within-day demeaning),
+hour-of-day × weekend controls, and day-clustered standard errors — so rain is
+identified purely from within-day contrasts. It reports rain's event-time footprint
+(leads as a falsification/anticipation check, lags for the wet-streets decay and the
+cumulative effect), rain by daypart with a heavy-rain shifter, and the member vs.
+casual elasticity gradient as a validity probe. Hour-level losses intentionally
+include within-day displacement; read them against the daily bars to bracket it.
 
 The **📊 Performance tab** turns the same modeling into an operator KPI. It predicts the
 trips you'd expect for each day's weather *and* time of year, then contrasts the actual

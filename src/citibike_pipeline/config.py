@@ -57,10 +57,26 @@ UNIFIED_TABLE = "m_trips_unified"
 DAILY_VIEW = "daily_trips"
 DAILY_TABLE = "m_daily_trips"
 DAILY_WEATHER_VIEW = "daily_trips_weather"
+# Hourly companions of the daily marts (same naming + materialization convention).
+HOURLY_VIEW = "hourly_trips"
+HOURLY_TABLE = "m_hourly_trips"
+HOURLY_WEATHER_VIEW = "hourly_trips_weather"
 
 # Daily NYC weather lives in a sibling dataset (same project + US location).
 WEATHER_DATASET = os.environ.get("CITIBIKE_WEATHER_DATASET", "weather")
 WEATHER_DAILY_TABLE = "m_weather_daily_nyc"
+
+# --- Stage W: hourly NYC weather (NOAA LCD v2) ---------------------------------
+# The daily mart summarizes GHCN-Daily for Central Park; LCD v2 is the *hourly*
+# ASOS record of the same station, so the two marts share one instrument.
+WEATHER_STATION = "USW00094728"  # NY CITY CENTRAL PARK — same id the daily mart filters on
+LCD_BASE_URL = "https://www.ncei.noaa.gov/oa/local-climatological-data/v2/access/"
+LCD_FIRST_YEAR = 2013            # Citibike era; LCD coverage reaches further back if needed
+LCD_RAW_PREFIX = "raw/lcd/"                  # immutable station-year CSVs, as published
+LCD_PARQUET_PREFIX = "weather/lcd/parquet/"  # typed Parquet (SI units, LST timestamps)
+WEATHER_HOURLY_EXTERNAL = "lcd_hourly_nyc"   # external table over the Parquet
+WEATHER_HOURLY_VIEW = "weather_hourly_nyc"   # imperial units + local-time keys + flags
+WEATHER_HOURLY_TABLE = "m_weather_hourly_nyc"
 
 # trips_unified double-counts January 2021 — the 2021 annual archive ships that
 # month in the legacy layout and Citibike *also* re-published it in the current

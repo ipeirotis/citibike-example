@@ -99,6 +99,41 @@ def main() -> int:
         ]), got
         print("  _csv_members keeps combined over shards and de-dups nested copies")
 
+    # --- hourly weather (LCD v2) transform -------------------------------------
+    # Pins the marker rules ('T' trace, 's' suspect, 'V' variable, VRB) and the
+    # FM-15/FM-16 filter + typed schema of Stage W.
+    from .weather_hourly import LCD_SCHEMA, clean_value, lcd_frame_to_table
+
+    assert clean_value("5.6") == 5.6
+    assert clean_value("T", trace_zero=True) == 0.0          # trace precip -> 0.0
+    assert clean_value("T") is None                          # trace elsewhere -> null
+    assert clean_value("0.805s") is None                     # suspect (failed QC) -> null
+    assert clean_value("3.219V") == 3.219                    # variable -> value stands
+    assert clean_value("VRB") is None and clean_value("") is None
+    LCD_CSV = (
+        "STATION,DATE,REPORT_TYPE,HourlyDryBulbTemperature,HourlyDewPointTemperature,"
+        "HourlyWetBulbTemperature,HourlyRelativeHumidity,HourlyPrecipitation,"
+        "HourlySeaLevelPressure,HourlyStationPressure,HourlyAltimeterSetting,"
+        "HourlyWindSpeed,HourlyWindGustSpeed,HourlyWindDirection,HourlyVisibility,"
+        "HourlySkyConditions,HourlyPresentWeatherType\n"
+        "72505394728,2024-07-15T14:51:00,FM-15,32.2,23.9,26.3,61.0,T,1009.0,1004.3,"
+        "1009.9,3.1,,VRB,16.093,FEW:02 72.43,\n"
+        "72505394728,2024-07-15T15:08:00,FM-16,31.7,23.9,26.0,63.0,0.5,1008.8,1004.1,"
+        "1009.7,4.6,9.8,260,4.023V,OVC:08 11.28,-RA:02 |RA |RA\n"
+        "72505394728,2024-07-15T23:59:00,SOD,,,,,,,,,,,,,\n"
+    )
+    wf = _frame(LCD_CSV)
+    wt = lcd_frame_to_table(wf, "raw/lcd/test.csv")
+    assert wt.schema.equals(LCD_SCHEMA), wt.schema
+    wd = wt.to_pydict()
+    assert wd["report_type"] == ["FM-15", "FM-16"]            # SOD summary row dropped
+    assert wd["precip_mm"] == [0.0, 0.5]                      # trace -> 0.0
+    assert wd["wind_dir_deg"] == [None, 260.0]                # VRB -> null
+    assert wd["visibility_km"] == [16.093, 4.023]             # 'V' variable stripped
+    assert wd["wind_gust_ms"] == [None, 9.8]
+    assert wd["present_weather"] == [None, "-RA:02 |RA |RA"]
+    print("  LCD hourly transform pins trace/suspect/variable markers and the FM filter")
+
     # A short header on a non-zero-index chunk (a later read_csv chunk) must fill the
     # absent column without union-misaligning indexes and inflating the row count.
     sf = _frame(CURRENT_CSV)

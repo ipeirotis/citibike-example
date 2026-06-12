@@ -169,6 +169,133 @@ def fit_humidity_impact(df: pd.DataFrame, trips_col: str) -> dict | None:
     }
 
 
+# ------------------------------------------------------------------------ hourly
+# Hourly weather-shock models over `hourly_trips_weather`. The hourly grain lets
+# the calendar controls saturate one level further than the daily model: a fixed
+# effect for every *calendar day* (absorbed by within-day demeaning — the within
+# estimator; 4.7k dummies would be infeasible dense). Day FE swallow growth,
+# season, weekday, holidays and the day's overall weather, so a rain coefficient
+# is identified purely from *within-day* contrasts: raining 8am vs dry 6pm of
+# the same day, net of the diurnal pattern (hour-of-day x weekend dummies).
+#
+# The estimand is deliberately different from fit_impacts': "what happens in
+# the very hour rain falls", which includes riders shifting to drier hours of
+# the same day. The daily model's rain bars give the net day effect; together
+# they bracket displacement (a lesson of the distributed-lag literature).
+# Inference clusters on the day — hours within a day share weather and demand
+# shocks, so HAC-by-observation would be too optimistic.
+HOUR_BANDS = [(0, 6, "overnight 12–6a"), (7, 9, "AM rush 7–9a"), (10, 15, "midday 10a–3p"),
+              (16, 19, "PM rush 4–7p"), (20, 23, "evening 8–11p")]
+HEAVY_RAIN_IN = 0.10   # >= 0.10 in/hour: heavy at the hourly grain
+PROFILE_LEADS = 2      # hours before the rain (anticipation / falsification)
+PROFILE_LAGS = 4       # hours after (wet streets, rebound) -> cumulative effect
+
+
+def _hourly_frame(df: pd.DataFrame, trips_col: str) -> pd.DataFrame:
+    """Hourly frame -> model frame (log trips, clock keys, rain leads/lags)."""
+    d = df.copy()
+    d["y"] = _num(d[trips_col])
+    for c in ["is_raining", "is_snowing", "prcp_inches"]:
+        d[c] = _num(d[c])
+    d["ts"] = d["date"] + pd.to_timedelta(d["hour"].astype(int), unit="h")
+    d = d.sort_values("ts")
+    d["heavy_rain"] = ((d["is_raining"] == 1) & (d["prcp_inches"] >= HEAVY_RAIN_IN)).astype(float)
+    # Leads/lags must align to real clock hours, so shift on the complete hourly
+    # grid (zero-trip hours are absent from the mart; their weather reads NaN and
+    # those rows drop later rather than mis-aligning the event time).
+    grid = pd.date_range(d["ts"].min(), d["ts"].max(), freq="h")
+    rain = d.set_index("ts")["is_raining"].reindex(grid)
+    for k in range(1, PROFILE_LEADS + 1):
+        d[f"rain_lead{k}"] = d["ts"].map(rain.shift(-k))
+    for k in range(1, PROFILE_LAGS + 1):
+        d[f"rain_lag{k}"] = d["ts"].map(rain.shift(k))
+    d = d[d["y"] > 0].copy()  # log outcome; zero-trip hours carry no signal here
+    d["logy"] = np.log(d["y"])
+    d["hw"] = (d["hour"].astype(int).astype(str) + "_"
+               + (d["date"].dt.dayofweek >= 5).astype(int).astype(str))
+    return d
+
+
+def _within_day_ols(d: pd.DataFrame, xcols: list[str]):
+    """OLS of log trips on `xcols`, with day fixed effects and day-clustered SEs.
+
+    Day FE are absorbed by demeaning outcome and regressors within each date
+    (Frisch–Waugh — identical point estimates to 4.7k day dummies). Hour-of-day x
+    weekend dummies enter as regressors so the diurnal shape is controlled.
+    """
+    import statsmodels.api as sm
+
+    hw = pd.get_dummies(d["hw"], prefix="hw", drop_first=True).astype(float)
+    X = pd.concat([d[xcols].astype(float), hw], axis=1)
+    keep = X.notna().all(axis=1) & d["logy"].notna()
+    X, y = X.loc[keep], d.loc[keep, "logy"]
+    days = d.loc[keep, "date"].values
+    Xd = X - X.groupby(days).transform("mean")
+    yd = y - y.groupby(days).transform("mean")
+    res = sm.OLS(yd, Xd).fit(cov_type="cluster", cov_kwds={"groups": days})
+    res._n_days = len(pd.unique(days))  # carried for reporting
+    return res
+
+
+def _pct(res, name: str) -> dict:
+    b, se = res.params[name], res.bse[name]
+    return {"pct": (np.exp(b) - 1) * 100,
+            "lo": (np.exp(b - 1.96 * se) - 1) * 100,
+            "hi": (np.exp(b + 1.96 * se) - 1) * 100}
+
+
+def fit_hourly_rain_profile(df: pd.DataFrame, trips_col: str) -> tuple[pd.DataFrame, dict]:
+    """Event-time footprint of an hour of rain: leads, the hour itself, lags.
+
+    Returns (profile, meta): one row per event hour k (-PROFILE_LEADS … 0 …
+    +PROFILE_LAGS, where 0 is the raining hour and negative k is *before* the
+    rain), and meta with n / n_days / the cumulative 0..+lags effect. The leads
+    double as a falsification check: hours before rain carry no wet streets, so
+    a large lead effect would flag leftover confounding (a small one reads as
+    anticipation — skies darken before rain reaches the gauge).
+    """
+    d = _hourly_frame(df, trips_col)
+    leads = [f"rain_lead{k}" for k in range(PROFILE_LEADS, 0, -1)]
+    lags = [f"rain_lag{k}" for k in range(1, PROFILE_LAGS + 1)]
+    terms = leads + ["is_raining"] + lags
+    res = _within_day_ols(d, terms + ["is_snowing"])
+
+    rows = []
+    for name, k in zip(terms, list(range(-PROFILE_LEADS, 0)) + list(range(0, PROFILE_LAGS + 1))):
+        rows.append({"k": k, **_pct(res, name)})
+    # Cumulative effect of one raining hour over that hour + the next lags
+    # (vector contrast on the joint covariance, as in _contrast).
+    names = ["is_raining"] + lags
+    vec = np.ones(len(names))
+    b = float(vec @ res.params[names].values)
+    se = float(np.sqrt(vec @ res.cov_params().loc[names, names].values @ vec))
+    meta = {"n": int(res.nobs), "n_days": res._n_days,
+            "cum_pct": (np.exp(b) - 1) * 100,
+            "cum_lo": (np.exp(b - 1.96 * se) - 1) * 100,
+            "cum_hi": (np.exp(b + 1.96 * se) - 1) * 100}
+    return pd.DataFrame(rows), meta
+
+
+def fit_hourly_rain_by_daypart(df: pd.DataFrame, trips_col: str) -> tuple[pd.DataFrame, dict]:
+    """Partial effect of rain *falling in that hour*, by daypart.
+
+    Rain enters interacted with the daypart bands (plus one heavy-rain shifter,
+    the hourly nonlinearity), so each coefficient is that daypart's own rain
+    elasticity under day FE — the commute-vs-leisure contrast, and the casual-
+    vs-member gradient when fit per rider segment.
+    """
+    d = _hourly_frame(df, trips_col)
+    cols = []
+    for lo, hi, label in HOUR_BANDS:
+        col = f"rain_{lo}_{hi}"
+        d[col] = d["is_raining"] * d["hour"].between(lo, hi).astype(float)
+        cols.append((col, label))
+    res = _within_day_ols(d, [c for c, _ in cols] + ["heavy_rain", "is_snowing"])
+    rows = [{"daypart": label, **_pct(res, col)} for col, label in cols]
+    meta = {"n": int(res.nobs), "n_days": res._n_days, "heavy_extra": _pct(res, "heavy_rain")}
+    return pd.DataFrame(rows), meta
+
+
 # --------------------------------------------------------------------------- KPI
 # Weather-adjusted ridership: model the trips you'd expect for each day's weather
 # *and* the time of year, then strip the weather out so growth and period-to-period
